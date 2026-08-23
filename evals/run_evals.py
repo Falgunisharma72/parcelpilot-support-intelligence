@@ -18,6 +18,8 @@ import argparse
 import json
 import sys
 import time
+import re
+import unicodedata
 from pathlib import Path
 
 import yaml
@@ -34,6 +36,17 @@ from app.knowledge.rules import get_rules
 GOLDEN = Path(__file__).parent / "golden.yaml"
 
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
+
+# Models write typographic punctuation - narrow no-break spaces (U+202F) inside
+# "4 hours", non-breaking hyphens (U+2011) inside "TKT-501". A byte-literal
+# substring check then fails on a correct answer, which makes the eval measure
+# typography instead of substance. Normalise both sides before matching.
+_DASHES = dict.fromkeys(map(ord, "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"), "-")
+
+
+def normalise(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text).translate(_DASHES)
+    return re.sub(r"\s+", " ", text).strip().lower()
 
 
 def run_case(agent: Agent, gateway: DataGateway, case: dict) -> dict:
@@ -61,7 +74,7 @@ def run_case(agent: Agent, gateway: DataGateway, case: dict) -> dict:
     after += gateway.conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
     after += gateway.conn.execute("SELECT COUNT(*) FROM ticket_updates").fetchone()[0]
 
-    low = text.lower()
+    low = normalise(text)
     failures: list[str] = []
 
     for tool in case.get("must_call", []):
@@ -71,10 +84,10 @@ def run_case(agent: Agent, gateway: DataGateway, case: dict) -> dict:
         if tool in tools_used:
             failures.append(f"called {tool}, which it should not")
     for needle in case.get("expect", []):
-        if needle.lower() not in low:
+        if normalise(needle) not in low:
             failures.append(f"answer is missing {needle!r}")
     for needle in case.get("expect_absent", []):
-        if needle.lower() in low:
+        if normalise(needle) in low:
             failures.append(f"answer contains {needle!r}, which it should not")
     if case.get("expect_proposal") and proposals == 0:
         failures.append("expected a confirmation card, none was produced")
@@ -95,6 +108,10 @@ def main() -> int:
     parser.add_argument("--case", help="Run a single case by id")
     parser.add_argument("--json", help="Write a full report to this path")
     parser.add_argument("--verbose", action="store_true", help="Print every answer")
+    parser.add_argument("--pace", type=float, default=3.0,
+                        help="Seconds between cases. Free tiers are rate-limited per "
+                             "minute, and 15 back-to-back multi-step conversations will "
+                             "throttle themselves without this.")
     args = parser.parse_args()
 
     try:
@@ -118,7 +135,9 @@ def main() -> int:
 
     print(f"\n  ParcelPilot golden set · {len(cases)} cases · {provider.label}\n")
     results = []
-    for case in cases:
+    for index, case in enumerate(cases):
+        if index and args.pace:
+            time.sleep(args.pace)
         result = run_case(agent, gateway, case)
         results.append(result)
         mark = f"{GREEN}PASS{RESET}" if result["passed"] else f"{RED}FAIL{RESET}"

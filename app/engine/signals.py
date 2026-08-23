@@ -34,6 +34,15 @@ from app.engine.sla import evaluate_sla
 from app.knowledge.rules import Rules
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+SIGNAL_SEVERITIES = frozenset(SEVERITY_ORDER)
+
+# The complete set of detector outputs. Exposed so the tool layer can reject an
+# unknown filter instead of returning an empty list that reads as "no problems".
+SIGNAL_TYPES = frozenset({
+    "sla_breach", "sla_at_risk", "p1_open", "known_issue_cluster",
+    "recurring_issue", "stale_guidance", "overdue_pickup", "awaiting_reply",
+    "cancellation_spike",
+})
 
 
 @dataclass
@@ -393,4 +402,4 @@ def summarise(signals: list[Signal]) -> dict:
     }
 
 
-__all__ = ["Signal", "detect_signals", "summarise"]
+__all__ = ["Signal", "detect_signals", "summarise", "SIGNAL_TYPES", "SIGNAL_SEVERITIES"]

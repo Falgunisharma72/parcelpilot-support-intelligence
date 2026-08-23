@@ -17,6 +17,8 @@ agent loop:
 """
 from __future__ import annotations
 
+import random
+import time
 from typing import Iterator
 
 import openai
@@ -41,6 +43,11 @@ def to_openai_tools(tools: list[dict]) -> list[dict]:
 class OpenAICompatProvider:
     supports_thinking = False
 
+    # Free tiers rate-limit, and a busy endpoint can abort a stream part-way.
+    # Both are transient and worth retrying - but only before the first token has
+    # reached the user, because retrying after that would duplicate visible output.
+    MAX_ATTEMPTS = 3
+
     def __init__(self, *, id: str, api_key: str, base_url: str, model: str,
                  label: str | None = None, max_tokens: int = 4096,
                  temperature: float | None = 0.2, extra_headers: dict | None = None,
@@ -53,9 +60,13 @@ class OpenAICompatProvider:
         self.temperature = temperature
         self.extra_headers = extra_headers or {}
         self.supports_stream_options = supports_stream_options
+        # max_retries=0: retry policy lives in this class, not in two places.
+        # Leaving the SDK's own retries on meant a 503 produced 3 SDK attempts
+        # inside each of 3 of ours - nine requests against a rate-limited free
+        # tier, which makes throttling worse rather than better.
         self.client = openai.OpenAI(api_key=api_key, base_url=base_url,
                                     default_headers=self.extra_headers or None,
-                                    timeout=120.0, max_retries=2)
+                                    timeout=120.0, max_retries=0)
 
     # -- wire format ---------------------------------------------------------
     def _to_wire(self, system: str, messages: list[Message]) -> list[dict]:
@@ -83,6 +94,27 @@ class OpenAICompatProvider:
     # -- streaming -----------------------------------------------------------
     def stream(self, *, system: str, messages: list[Message],
                tools: list[dict]) -> Iterator[dict]:
+        """Stream a turn, retrying transient failures that occur before output.
+
+        A rate limit or a mid-stream abort on a free tier is not a reason to
+        fail a support conversation. Once anything has been yielded to the user
+        the attempt is committed, so the error is surfaced instead.
+        """
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            emitted = False
+            try:
+                for event in self._stream_once(system, messages, tools):
+                    emitted = True
+                    yield event
+                return
+            except _Transient as exc:
+                if emitted or attempt == self.MAX_ATTEMPTS:
+                    raise ProviderError(str(exc)) from exc
+                delay = exc.retry_after or (0.8 * 2 ** (attempt - 1) + random.random() * 0.4)
+                time.sleep(min(delay, 20.0))
+
+    def _stream_once(self, system: str, messages: list[Message],
+                     tools: list[dict]) -> Iterator[dict]:
         request: dict = {
             "model": self.model,
             "messages": self._to_wire(system, messages),
@@ -159,17 +191,28 @@ class OpenAICompatProvider:
                 "still active. Nothing was changed."
             ) from exc
         except openai.RateLimitError as exc:
-            raise ProviderError(
+            raise _Transient(
                 f"{self.id} free-tier rate limit reached. Wait a moment and retry, "
-                "or switch provider with PARCELPILOT_PROVIDER. Nothing was changed."
+                "or switch provider with PARCELPILOT_PROVIDER. Nothing was changed.",
+                retry_after=_retry_after(exc),
             ) from exc
         except openai.APIConnectionError as exc:
-            raise ProviderError(
+            raise _Transient(
                 f"Could not reach {self.id} at {self.base_url}. Nothing was changed."
             ) from exc
         except openai.APIStatusError as exc:
-            raise ProviderError(
-                f"{self.id} returned {exc.status_code}. Nothing was changed."
+            message = (f"{self.id} returned {exc.status_code}: {_first_line(exc)}. "
+                       "Nothing was changed.")
+            if exc.status_code >= 500:
+                raise _Transient(message) from exc
+            raise ProviderError(message) from exc
+        except openai.APIError as exc:
+            # Base-class catch-all, and the one that actually fires when a
+            # provider aborts mid-stream. Swallowing the message here left a
+            # bare "APIError" in the eval report and nothing to debug from, so
+            # the underlying text is always carried through.
+            raise _Transient(
+                f"{self.id} failed mid-response: {_first_line(exc)}. Nothing was changed."
             ) from exc
 
         calls = []
@@ -223,6 +266,28 @@ class OpenAICompatProvider:
             return sorted(m.id for m in self.client.models.list().data)
         except Exception:                                    # noqa: BLE001
             return []
+
+
+class _Transient(RuntimeError):
+    """A failure worth retrying: rate limit, 5xx, or a stream that aborted."""
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _retry_after(exc: Exception) -> float | None:
+    response = getattr(exc, "response", None)
+    header = getattr(response, "headers", {}) or {}
+    try:
+        return float(header.get("retry-after"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_line(exc: Exception) -> str:
+    text = str(exc).strip() or exc.__class__.__name__
+    return text.splitlines()[0][:400]
 
 
 def _dump(value: dict) -> str:

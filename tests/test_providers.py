@@ -274,3 +274,88 @@ def test_env_file_is_visible_to_provider_selection():
     import app.agent.providers as registry
     assert "app.config" in sys.modules
     assert hasattr(registry, "resolve")
+
+
+class _FlakyHandler(BaseHTTPRequestHandler):
+    """Fails with 503 the first N times, then streams normally."""
+    remaining = 0
+    attempts = 0
+
+    def do_POST(self):                                        # noqa: N802
+        _FlakyHandler.attempts += 1
+        if _FlakyHandler.remaining > 0:
+            _FlakyHandler.remaining -= 1
+            body = json.dumps({"error": {"message": "service overloaded"}}).encode()
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        self.wfile.write(_sse(_chunk({"content": "recovered"})))
+        self.wfile.write(_sse(_chunk({}, finish="stop")))
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture()
+def flaky(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda *_: None)        # no real backoff in tests
+    httpd = HTTPServer(("127.0.0.1", 0), _FlakyHandler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    _FlakyHandler.attempts = 0
+    yield OpenAICompatProvider(
+        id="flaky", api_key="k", base_url=f"http://127.0.0.1:{httpd.server_port}/v1",
+        model="m", supports_stream_options=False)
+    httpd.shutdown()
+
+
+def test_transient_failure_is_retried_before_any_output(flaky):
+    """Free tiers rate-limit and overload. A support conversation should not die
+    because the first attempt was throttled."""
+    _FlakyHandler.remaining = 2
+    _, turn = _run(flaky)
+    assert turn.text == "recovered"
+    assert _FlakyHandler.attempts == 3
+
+
+def test_retries_are_bounded(flaky):
+    _FlakyHandler.remaining = 99
+    with pytest.raises(Exception) as excinfo:
+        _run(flaky)
+    assert "Nothing was changed" in str(excinfo.value)
+    assert _FlakyHandler.attempts == OpenAICompatProvider.MAX_ATTEMPTS
+
+
+def test_a_client_error_is_not_retried(server, monkeypatch):
+    """400s are the caller's fault - retrying just burns free-tier quota."""
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    provider = OpenAICompatProvider(id="mock", api_key="k", base_url=server,
+                                    model="m", supports_stream_options=False)
+
+    calls = {"n": 0}
+    real = provider.client.chat.completions.create
+
+    def counted(**kwargs):
+        calls["n"] += 1
+        raise openai_bad_request()
+
+    provider.client.chat.completions.create = counted
+    with pytest.raises(Exception):
+        _run(provider)
+    assert calls["n"] == 1
+    provider.client.chat.completions.create = real
+
+
+def openai_bad_request():
+    import httpx
+    import openai
+    request = httpx.Request("POST", "http://x/v1/chat/completions")
+    response = httpx.Response(400, request=request, json={"error": {"message": "bad"}})
+    return openai.BadRequestError("bad", response=response, body=None)

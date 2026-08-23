@@ -27,7 +27,7 @@ from app.core.principal import AccessDenied, Perm, Principal
 from app.core.proposals import ProposalStore, register_executor
 from app.engine.cancellation import evaluate_cancellation
 from app.engine.credits import evaluate_service_credit
-from app.engine.signals import detect_signals, summarise
+from app.engine.signals import SIGNAL_SEVERITIES, SIGNAL_TYPES, detect_signals, summarise
 from app.engine.sla import evaluate_sla
 from app.knowledge.retrieval import ClauseIndex
 from app.knowledge.rules import Rules
@@ -226,17 +226,22 @@ TOOL_SPECS: list[dict] = [
         "category": "signals",
         "description": (
             "Internal only. Run proactive detection across all accounts at the dataset "
-            "snapshot: SLA breaches and at-risk tickets, open P1s, clusters of tickets "
-            "tracing to one known issue, recurring problems, past support answers that "
-            "current rules contradict, overdue pickups with credit exposure, and unusual "
-            "cancellation activity. Use for 'what needs attention', triage and prioritisation."
+            "snapshot. Call it with no arguments to see everything; filter only when you "
+            "already know the exact type you want. Valid types are exactly: "
+            "sla_breach, sla_at_risk, p1_open, known_issue_cluster, recurring_issue, "
+            "stale_guidance (past support answers that current rules contradict), "
+            "overdue_pickup, awaiting_reply, cancellation_spike. Anything else is an "
+            "error, not an empty result. Use for 'what needs attention', triage, "
+            "prioritisation, and for finding customers who were previously told something "
+            "incorrect (stale_guidance)."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "severity": {"type": "string", "description": "critical | high | medium | low"},
                 "types": {"type": "array", "items": {"type": "string"},
-                          "description": "Filter to specific signal types."},
+                          "description": ("Filter to specific signal types. Must be from the "
+                                          "exact list in the tool description; omit to see all.")},
                 "account_id": {"type": "string"},
             },
         },
@@ -555,19 +560,47 @@ class ToolRuntime:
 
     # -- signals ------------------------------------------------------------
     def _t_get_operational_signals(self, principal: Principal, session_id: str, args: dict) -> dict:
-        signals = detect_signals(
+        found = detect_signals(
             self.db.scan(principal, "accounts"), self.db.scan(principal, "orders"),
             self.db.scan(principal, "tickets"), self.rules, self.db.clock.now())
-        if args.get("severity"):
-            signals = [s for s in signals if s.severity == args["severity"]]
+        signals = list(found)
+
+        # An unknown filter value must be an error, never an empty result set.
+        # A model that guesses `past_incorrect_guidance` instead of
+        # `stale_guidance` and gets back zero signals will report "no such
+        # problems exist" with total confidence - which is precisely the failure
+        # this product exists to prevent. Say the filter was wrong instead.
         if args.get("types"):
             wanted = set(args["types"])
+            unknown = sorted(wanted - set(SIGNAL_TYPES))
+            if unknown:
+                return {"error": f"Unknown signal type(s): {', '.join(unknown)}.",
+                        "valid_types": sorted(SIGNAL_TYPES),
+                        "note": ("No filtering was applied and nothing was searched. "
+                                 "Re-run with a valid type, or with no type filter at all. "
+                                 "Do not report these signals as absent.")}
             signals = [s for s in signals if s.type in wanted]
+        if args.get("severity"):
+            severity = str(args["severity"]).lower()
+            if severity not in SIGNAL_SEVERITIES:
+                return {"error": f"Unknown severity {args['severity']!r}.",
+                        "valid_severities": sorted(SIGNAL_SEVERITIES),
+                        "note": "No filtering was applied. Do not report signals as absent."}
+            signals = [s for s in signals if s.severity == severity]
         if args.get("account_id"):
             signals = [s for s in signals if args["account_id"] in s.accounts]
-        return {"summary": summarise(signals),
-                "signals": [s.to_dict() for s in signals[:25]],
-                "snapshot": fmt(self.db.clock.now())}
+
+        payload = {"summary": summarise(signals),
+                   "signals": [s.to_dict() for s in signals[:25]],
+                   "snapshot": fmt(self.db.clock.now())}
+        # An empty *filtered* result is not evidence of absence, and the
+        # difference matters enough to spell out in the payload.
+        if not signals and found:
+            payload["note"] = (
+                f"No signals match this filter, but {len(found)} signals exist overall "
+                f"(types present: {', '.join(sorted({s.type for s in found}))}). "
+                "Re-run without the filter before telling the user nothing was found.")
+        return payload
 
     # -- actions (proposals only) -------------------------------------------
     def _t_propose_escalation(self, principal: Principal, session_id: str, args: dict) -> dict:
