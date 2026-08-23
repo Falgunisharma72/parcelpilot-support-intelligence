@@ -1,0 +1,16 @@
+# Render blueprint - free tier, no card required.
+#   1. Push this repo to GitHub.
+#   2. Render dashboard -> New -> Blueprint -> pick the repo.
+#   3. Paste ANTHROPIC_API_KEY when prompted (it is marked sync:false so it is
+#      never committed).
+services:
+  - type: web
+    name: parcelpilot-support
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: PARCELPILOT_EFFORT
+        value: high

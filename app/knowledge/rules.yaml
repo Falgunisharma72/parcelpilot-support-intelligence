@@ -1,0 +1,205 @@
+# ---------------------------------------------------------------------------
+# ParcelPilot decision rules
+# ---------------------------------------------------------------------------
+# This file is the *machine-readable projection* of the document pack: the
+# numeric thresholds a decision actually turns on (30 minutes, INR 250, 2 hours,
+# 10%, 15 minutes) lifted out of prose so they can be applied deterministically.
+#
+# It is NOT a substitute for the documents and it is NOT hand-maintained trivia:
+#   * every rule carries `source.clause_id` + `source.anchor`, a verbatim
+#     snippet from the parsed PDF;
+#   * on startup `rules.py` re-parses the PDFs and asserts every anchor is still
+#     present in its clause. If a document is replaced with a newer version and
+#     a threshold moves, the app refuses to start rather than answering from a
+#     stale number.
+#   * `scripts/extract_rules.py` regenerates this file from the PDFs with Claude,
+#     so onboarding a new document is an extraction + review step, not a code
+#     change.
+#
+# Why not let the model read the threshold out of the retrieved text each time?
+# Because "is 11:00 more than 30 minutes after 09:00, and does a contract clause
+# disapply the fee" is arithmetic and precedence logic, not language. Doing it
+# in code makes it testable, identical on every run, and explainable as a trace.
+version: 3
+snapshot_note: All time comparisons run against the workbook's dataset snapshot.
+
+source_precedence:
+  # Support Policy v3, s1.
+  tiers:
+    - {tier: 1, name: Signed customer agreement}
+    - {tier: 2, name: Current support policy / SOP}
+    - {tier: 3, name: Current product documentation}
+    - {tier: 4, name: "Historical tickets and internal notes (context only, may be wrong)"}
+  source:
+    clause_id: 01_Support_Policy_v3_CURRENT.pdf#s1.1
+    anchor: "use the signed customer agreement first"
+
+cancellation:
+  default:
+    DRAFT:
+      cancellable: true
+      fee_inr: 0
+      source: {clause_id: "03_Cancellation_and_Service_Credit_SOP_v4.pdf#s1.1", anchor: "DRAFT: May be cancelled with no fee"}
+    BOOKED:
+      cancellable: true
+      free_window_minutes: 30
+      fee_after_window_inr: 250
+      contract_waivable: true
+      source: {clause_id: "03_Cancellation_and_Service_Credit_SOP_v4.pdf#s1.2", anchor: "No fee within 30 minutes of booking"}
+    PICKED_UP:
+      cancellable: false
+      alternative: return-to-origin workflow
+      source: {clause_id: "03_Cancellation_and_Service_Credit_SOP_v4.pdf#s1.3", anchor: "PICKED_UP: Do not cancel"}
+    DELIVERED:
+      cancellable: false
+      source: {clause_id: "03_Cancellation_and_Service_Credit_SOP_v4.pdf#s1.4", anchor: "DELIVERED: Cannot be cancelled"}
+
+service_credit:
+  default_failed_pickup:
+    threshold_hours_past_window_end: 2
+    amount:
+      type: lesser_of
+      flat_inr: 500
+      percent_of_shipment_fee: 10
+    requires: [carrier_fault, no_customer_fault]
+    source: {clause_id: "03_Cancellation_and_Service_Credit_SOP_v4.pdf#s2.1", anchor: "more than 2 hours past the end of the scheduled pickup window"}
+  manager_approval_above_inr: 1000
+  manager_approval_source: {clause_id: "03_Cancellation_and_Service_Credit_SOP_v4.pdf#s3.1", anchor: "above INR 1,000 requires manager approval"}
+  uncertainty_rule: Do not promise a credit when carrier fault, pickup timing, or customer fault is unknown.
+  uncertainty_source: {clause_id: "03_Cancellation_and_Service_Credit_SOP_v4.pdf#s3.2", anchor: "Do not promise a credit when carrier fault"}
+
+severity:
+  P1:
+    label: Critical
+    definition: Complete production outage preventing all shipment creation for a customer, a confirmed security incident or suspected credential exposure, or another event causing immediate material business risk with no workaround.
+    escalate_immediately: true
+  P2:
+    label: High
+    definition: Major feature unavailable or materially degraded, but core operations remain possible or a workaround exists.
+    escalate_immediately: false
+  P3:
+    label: Normal
+    definition: Minor defect, how-to question, configuration request, or issue with limited operational impact.
+    escalate_immediately: false
+  source: {clause_id: "01_Support_Policy_v3_CURRENT.pdf#s2.1", anchor: "P1 - Critical: Complete production outage"}
+  escalation_source: {clause_id: "01_Support_Policy_v3_CURRENT.pdf#s4.1", anchor: "P1 incidents should be escalated immediately"}
+
+sla:
+  # Support Policy v3, s3 - default first-response targets by plan.
+  default_first_response:
+    Enterprise:
+      P1: {value: 30, unit: minutes, clock: calendar}
+      P2: {value: 2, unit: hours, clock: calendar}
+      P3: {value: 1, unit: days, clock: business}
+    Growth:
+      P1: {value: 2, unit: hours, clock: business}
+      P2: {value: 4, unit: hours, clock: business}
+      P3: {value: 2, unit: days, clock: business}
+    Standard:
+      P1: {value: 4, unit: hours, clock: business}
+      P2: {value: 1, unit: days, clock: business}
+      P3: {value: 2, unit: days, clock: business}
+  source: {clause_id: "01_Support_Policy_v3_CURRENT.pdf#s3.1", anchor: "Enterprise 30 minutes, 24x7 2 hours 1 business day"}
+
+# ---------------------------------------------------------------------------
+# Per-account contractual overrides (authority tier 1)
+# ---------------------------------------------------------------------------
+account_overrides:
+  ACCT-001:
+    account_name: Northstar Logistics
+    contract: 05_Northstar_Logistics_Enterprise_Agreement.pdf
+    term: {start: 2026-01-01, end: 2026-12-31}
+    first_response:
+      P1: {value: 15, unit: minutes, clock: calendar}
+      P2: {value: 1, unit: hours, clock: calendar}
+      P3: {value: 8, unit: hours, clock: business}
+    first_response_source: {clause_id: "05_Northstar_Logistics_Enterprise_Agreement.pdf#s1.2", anchor: "P1: 15 minutes, 24x7"}
+    cancellation:
+      BOOKED:
+        cancellable: true
+        fee_inr: 0
+        waives_default_fee: true
+        note: Applies to any BOOKED shipment before pickup regardless of elapsed time since booking.
+      source: {clause_id: "05_Northstar_Logistics_Enterprise_Agreement.pdf#s2.1", anchor: "no cancellation fee, regardless of how long ago the shipment was booked"}
+    service_credit:
+      monthly_aggregate_cap_inr: 5000
+      failed_pickup: inherits_default
+      source: {clause_id: "05_Northstar_Logistics_Enterprise_Agreement.pdf#s3.1", anchor: "capped at INR 5,000"}
+
+  ACCT-002:
+    account_name: LumenWorks
+    contract: 06_LumenWorks_Service_Agreement.pdf
+    term: {start: 2026-03-01, end: 2027-02-28}
+    first_response:
+      P1: {value: 2, unit: hours, clock: business}
+      P2: {value: 4, unit: hours, clock: business}
+      P3: {value: 2, unit: days, clock: business}
+    first_response_source: {clause_id: "06_LumenWorks_Service_Agreement.pdf#s1.1", anchor: "P1: 2 business hours"}
+    coverage:
+      weekend_or_after_hours: false
+      note: No weekend or after-hours support coverage; every target runs on the business clock.
+      source: {clause_id: "06_LumenWorks_Service_Agreement.pdf#s1.4", anchor: "No weekend or after-hours support coverage"}
+    cancellation:
+      inherits_default: true
+      source: {clause_id: "06_LumenWorks_Service_Agreement.pdf#s2.1", anchor: "No special cancellation-fee waiver applies"}
+    service_credit:
+      failed_pickup:
+        threshold_hours_past_window_end: 4
+        amount: {type: fixed, flat_inr: 300}
+        requires: [carrier_fault, no_customer_fault]
+        replaces_default: true
+      source: {clause_id: "06_LumenWorks_Service_Agreement.pdf#s3.1", anchor: "more than 4 hours past the end of the scheduled pickup window"}
+
+# ---------------------------------------------------------------------------
+# Known issues (product documentation, authority tier 3)
+# ---------------------------------------------------------------------------
+known_issues:
+  - id: KI-208
+    title: Bulk Upload failures on large CSVs
+    status: Investigating
+    opened: 2026-08-10
+    applies_to_plans: [Growth, Enterprise]
+    trigger: CSV uploads above approximately 3,000 rows
+    workaround: Split the upload into files below 3,000 rows. Individual shipment creation is unaffected.
+    match_keywords: [bulk upload, csv, rows, upload fails, bulk]
+    source: {clause_id: "04_Product_Operations_Guide_and_Known_Issues.pdf#s2.1", anchor: "intermittent failures on CSV uploads above approximately 3,000"}
+  - id: KI-211
+    title: SwiftShip pickup webhook delay
+    status: Monitoring
+    opened: 2026-08-12
+    carrier: SwiftShip
+    delay_window_minutes: 20
+    caution: A parcel may physically be collected while ParcelPilot still shows BOOKED. Verify carrier status or wait out the delay window before telling a customer the pickup did not occur.
+    match_keywords: [swiftship, still shows booked, pickup not updated, webhook, status not updated]
+    source: {clause_id: "04_Product_Operations_Guide_and_Known_Issues.pdf#s2.2", anchor: "pickup confirmation webhooks can arrive up to 20 minutes late"}
+  - id: KI-176
+    title: Address validation
+    status: Resolved
+    resolved: 2026-07-18
+    caution: Do not use this resolved issue to explain new incidents unless evidence specifically matches it.
+    match_keywords: [address validation]
+    source: {clause_id: "04_Product_Operations_Guide_and_Known_Issues.pdf#s3.1", anchor: "Do not use this resolved issue to explain new incidents"}
+
+plan_capabilities:
+  bulk_upload:
+    available_on: [Growth, Enterprise]
+    max_rows: 5000
+    source: {clause_id: "04_Product_Operations_Guide_and_Known_Issues.pdf#s1.1", anchor: "up to 5,000 rows per CSV"}
+
+# Requests the agent must never resolve on its own authority. These are the
+# "human judgment / unsupported exception / outside the system" cases from the
+# brief, expressed as data so the escalation boundary is reviewable.
+escalation_triggers:
+  - id: security_incident
+    reason: Suspected or confirmed credential exposure or security incident.
+    match_keywords: [api key, credential, exposed, security incident, leaked, breach]
+  - id: fee_or_policy_exception
+    reason: Customer is asking for an exception to a policy, fee or contract term.
+    match_keywords: [waive, exception, goodwill, make an exception, one time, as a favour, as a favor]
+  - id: credit_above_threshold
+    reason: Individual service credit above INR 1,000 requires manager approval.
+  - id: contradictory_data
+    reason: Sources disagree or required facts (carrier fault, pickup time) are unknown.
+  - id: legal_or_contractual_change
+    reason: Contract renegotiation, termination, legal or billing dispute.
+    match_keywords: [terminate, cancel our contract, lawsuit, legal, chargeback, dispute the invoice]

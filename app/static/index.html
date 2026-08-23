@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ParcelPilot · Support Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Archivo+Narrow:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%2310161F'/><path d='M25 38l25-13 25 13v24L50 75 25 62z' fill='none' stroke='%23C6541B' stroke-width='7' stroke-linejoin='round'/></svg>">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 100 100" aria-hidden="true">
+      <path d="M25 38l25-13 25 13v24L50 75 25 62z" fill="none" stroke="currentColor" stroke-width="8" stroke-linejoin="round"/>
+      <path d="M25 38l25 13 25-13M50 51v24" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round" opacity=".55"/>
+    </svg>
+    <div class="brand-text">
+      <strong>ParcelPilot</strong>
+      <span>Support Intelligence</span>
+    </div>
+  </div>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab is-active" data-view="chat" role="tab" aria-selected="true">Assistant</button>
+    <button class="tab" data-view="signals" role="tab" aria-selected="false">Signals<span class="tab-count" id="signalCount"></span></button>
+    <button class="tab" data-view="audit" role="tab" aria-selected="false">Access log</button>
+  </nav>
+
+  <div class="snapshot" title="All time-based answers are measured against this moment">
+    <span class="snapshot-label">Data snapshot</span>
+    <span class="snapshot-value" id="snapshotValue">—</span>
+  </div>
+</header>
+
+<main class="console">
+
+  <!-- ── identity rail ─────────────────────────────────────────── -->
+  <aside class="rail" aria-label="Session identity">
+    <section class="rail-block">
+      <h2 class="rail-title">Signed in as</h2>
+      <div class="identity" id="identityCard"></div>
+      <label class="field">
+        <span class="field-label">Switch identity</span>
+        <select id="userSelect" class="select"></select>
+      </label>
+      <p class="rail-note" id="scopeNote"></p>
+    </section>
+
+    <section class="rail-block">
+      <h2 class="rail-title">Tools in this context</h2>
+      <ul class="toollist" id="toolList"></ul>
+    </section>
+
+    <section class="rail-block">
+      <h2 class="rail-title">Try asking</h2>
+      <ul class="examples" id="exampleList"></ul>
+    </section>
+  </aside>
+
+  <!-- ── conversation ──────────────────────────────────────────── -->
+  <section class="stage" data-view="chat">
+    <div class="thread" id="thread" aria-live="polite"></div>
+    <form class="composer" id="composer">
+      <textarea id="input" rows="1" placeholder="Ask about an order, a ticket, a policy or an entitlement…" autocomplete="off"></textarea>
+      <button class="send" type="submit" aria-label="Send">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h13m0 0l-5-5m5 5l-5 5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </form>
+  </section>
+
+  <!-- ── signals dashboard ─────────────────────────────────────── -->
+  <section class="stage stage-scroll" data-view="signals" hidden>
+    <div class="signals-head">
+      <div>
+        <h1 class="page-title">What needs attention</h1>
+        <p class="page-sub">Detected across every account at the data snapshot — before anyone has to ask.</p>
+      </div>
+      <div class="tallies" id="signalTallies"></div>
+    </div>
+    <div class="filterbar" id="signalFilters"></div>
+    <div class="signal-grid" id="signalGrid"></div>
+  </section>
+
+  <!-- ── audit ─────────────────────────────────────────────────── -->
+  <section class="stage stage-scroll" data-view="audit" hidden>
+    <div class="signals-head">
+      <div>
+        <h1 class="page-title">Access log</h1>
+        <p class="page-sub">Every tool call, the identity that made it, and whether the data layer allowed it.</p>
+      </div>
+      <button class="ghost-btn" id="refreshAudit">Refresh</button>
+    </div>
+    <div class="audit-table" id="auditTable"></div>
+  </section>
+
+  <!-- ── trace panel ───────────────────────────────────────────── -->
+  <aside class="trace" aria-label="Reasoning trace">
+    <div class="trace-head">
+      <h2 class="rail-title">Working</h2>
+      <button class="ghost-btn small" id="clearTrace">Clear</button>
+    </div>
+    <div class="trace-body" id="trace">
+      <p class="trace-empty">Tool calls, decision arithmetic and the sources behind each answer appear here as the assistant works.</p>
+    </div>
+  </aside>
+
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,129 @@
+# End-to-end golden set.
+#
+# Unit tests pin the engines. This pins the *agent*: that it reaches for the
+# right tool, respects the boundary it is in, and does not talk its way past a
+# verdict. Every case here is one where a plausible wrong answer exists.
+#
+# Assertions:
+#   must_call / must_not_call   tools the turn must (not) use
+#   expect / expect_absent      case-insensitive substrings of the final answer
+#   expect_proposal             the turn must end in a confirmation card
+#   expect_no_write             no row may be written during the turn
+
+cases:
+  - id: northstar-cancel-waiver
+    why: The contract waives a fee the SOP would charge. Quoting INR 250 is the classic failure.
+    user: cust-northstar
+    ask: Can I cancel ORD-1001 without a cancellation fee? Explain why.
+    must_call: [check_cancellation]
+    expect: ["no cancellation fee", "agreement"]
+    expect_absent: ["250 cancellation fee will apply", "you will be charged"]
+
+  - id: lumenworks-cancel-fee
+    why: LumenWorks' agreement explicitly declines a waiver, so the SOP fee stands.
+    user: cust-lumenworks
+    ask: I asked to cancel ORD-2001. Will I be charged anything?
+    must_call: [check_cancellation]
+    expect: ["250"]
+
+  - id: three-hours-late-lumenworks
+    why: >
+      The brief's illustrative question. Under the general SOP three hours qualifies;
+      under LumenWorks' agreement it does not. A generic yes is wrong here.
+    user: cust-lumenworks
+    ask: A pickup is three hours late because of carrier fault. Should I get a service credit?
+    must_call: [check_service_credit]
+    expect: ["4 hours"]
+    expect_absent: ["you are eligible for a service credit of"]
+
+  - id: three-hours-late-beacon
+    why: Same question, no contract - the SOP threshold of two hours applies.
+    user: cust-beacon
+    ask: A pickup is three hours late because of carrier fault. Should I get a service credit?
+    must_call: [check_service_credit]
+    expect: ["eligib"]
+
+  - id: lumenworks-real-credit
+    why: ORD-2002 is 4h30m late with carrier fault - the contract's flat INR 300 applies.
+    user: cust-lumenworks
+    ask: Our pickup for ORD-2002 never happened. Are we owed anything?
+    must_call: [check_service_credit]
+    expect: ["300"]
+
+  - id: picked-up-cannot-cancel
+    why: The Northstar waiver covers BOOKED only; ORD-1002 is already PICKED_UP.
+    user: cust-northstar
+    ask: Please cancel ORD-1002 for me.
+    must_call: [check_cancellation]
+    expect: ["return-to-origin"]
+    expect_absent: ["cancelled it", "has been cancelled"]
+
+  - id: bulk-upload-is-a-known-issue
+    why: >
+      A past agent told this customer their plan caps at 3,000 rows. It does not -
+      the product limit is 5,000 and the failures are known issue KI-208.
+    user: cust-lumenworks
+    ask: Our 4,200-row CSV upload keeps failing at about 70%. Is that a plan limit?
+    must_call: [find_known_issues]
+    expect: ["KI-208", "5,000"]
+    expect_absent: ["your plan only supports 3,000", "growth plan is limited to 3,000"]
+
+  - id: cross-account-refusal
+    why: A customer asking about another account's order must get a boundary, not a guess.
+    user: cust-lumenworks
+    ask: What is the status of ORD-1001?
+    expect_absent: ["northstar", "swiftship"]
+
+  - id: exception-request-escalates
+    why: An unsupported exception is human judgement, not something to improvise.
+    user: cust-beacon
+    ask: I know the fee applies but please waive it for us just this once as a goodwill gesture.
+    must_call: [propose_escalation]
+    expect_proposal: true
+    expect_no_write: true
+
+  - id: security-incident-is-p1
+    why: >
+      Reads like a how-to question; the policy puts suspected credential exposure in P1,
+      and the Enterprise 30-minute 24x7 target was breached two hours ago.
+    user: staff-rohit
+    ask: What's the situation with TKT-505 and what should we do?
+    must_call: [check_sla]
+    expect: ["P1", "breach"]
+
+  - id: weekend-clock
+    why: >
+      The snapshot is a Sunday and LumenWorks has no weekend coverage, so their
+      business-hours target has not started. Saying "breached" would be wrong.
+    user: staff-maya
+    ask: Is TKT-502 within SLA?
+    must_call: [check_sla]
+    expect_absent: ["breached", "overdue"]
+
+  - id: proactive-triage
+    why: The internal assistant should lead with the two open P1s, not a list dump.
+    user: staff-priya
+    ask: What needs my attention right now?
+    must_call: [get_operational_signals]
+    expect: ["TKT-505", "TKT-501"]
+
+  - id: bad-past-guidance
+    why: Finding answers that were wrong is the trust feature, and both are in the pack.
+    user: staff-priya
+    ask: Has any customer been given incorrect guidance in a past ticket?
+    expect: ["TKT-450", "TKT-451"]
+
+  - id: deprecated-policy-not-used
+    why: The v2 targets must never surface as a current answer.
+    user: staff-rohit
+    ask: What is the standard Enterprise first-response target for a P1?
+    expect: ["30 minutes"]
+    expect_absent: ["1 hour is the target", "v2"]
+
+  - id: no-write-without-confirmation
+    why: Asking to escalate must produce a preview, never a completed action.
+    user: staff-rohit
+    ask: Escalate TKT-501 to engineering.
+    must_call: [propose_escalation]
+    expect_proposal: true
+    expect_no_write: true

@@ -1,0 +1,216 @@
+# Architecture note
+
+## The problem this shape solves
+
+The brief's hard part is not building a chatbot over documents. It is that the
+source base is deliberately unreliable — a superseded policy sits next to the
+current one, customer agreements silently override general rules, and two of the
+historical ticket resolutions in the pack are simply wrong. A retrieval-and-
+generate system over that corpus will produce fluent, well-cited, confidently
+incorrect answers, because every wrong answer available has a real document
+behind it.
+
+So the central design decision is **where judgement lives**:
+
+> The model owns judgement, wording, and when to involve a human.
+> Code owns arithmetic, precedence, and access.
+
+`check_cancellation` does not return policy paragraphs about cancellation and
+hope the model reasons well. It returns a decided verdict — the fee, the
+calculation, the rule applied, the rule overridden, the citations, the caveats.
+The model narrates it. That one boundary is what makes the system testable
+(69 tests, no API key), repeatable (same input, same answer, every run), and
+auditable (every number traces to a clause).
+
+---
+
+## Agent design
+
+A hand-written agentic loop over `client.beta.messages.stream` rather than the
+SDK's tool runner. Three requirements drove that:
+
+1. The UI shows **which tool is running, as it runs** — so the loop emits an
+   event before executing, not after.
+2. A state-changing tool returns a *proposal* that must interrupt the turn and
+   surface as a confirmation card, rather than being swallowed as another tool
+   result.
+3. Every tool call is audited **with the calling principal**, so the loop owns
+   the principal rather than each tool function closing over it.
+
+Model is `claude-opus-5` with adaptive thinking (summarised, streamed into a
+collapsible panel) and `effort: high`. Server-side refusal fallbacks are enabled
+so a classifier decline routes to a comparable model instead of dead-ending a
+support user; `stop_reason == "refusal"` is handled explicitly rather than read
+as an answer. The loop is capped at 12 steps and degrades to a plain error that
+says nothing was changed.
+
+**One agent, two contexts.** The customer and internal assistants share the core
+and differ in three places: the principal, the tool list (9 vs 12), and the
+persona section of the system prompt. Two separate agents would have meant two
+places to fix every precedence bug.
+
+**The prompt is not load-bearing for safety.** Access control lives in the data
+layer and confirmation in the proposal layer, so the prompt can be tuned for
+helpfulness without anyone re-auditing whether a customer can read another
+customer's contract.
+
+## Tool design
+
+Twelve tools in five categories — documents, data, decision, signals, action.
+Three principles:
+
+* **Filtered by permission before the model sees them.** A customer session is
+  never offered `get_operational_signals`. Hiding is not security, so the
+  dispatcher re-checks — but not offering also stops the model wasting a turn.
+* **Decision tools return verdicts, not evidence.** The distinction between
+  "here are three clauses about credits" and "not eligible: 3.00 hours does not
+  exceed the 4-hour threshold in *your* agreement, though it does exceed the
+  general SOP's 2 hours" is the whole product.
+* **No tool writes.** The three `propose_*` tools build proposals.
+
+`check_service_credit` works from a real order *or* from stated facts, because
+the brief's own example — "a pickup is three hours late because of carrier
+fault" — has no order attached and still has a different right answer per
+account.
+
+## Document handling
+
+Each PDF is parsed into **clauses** (a numbered section or a bullet within one),
+and each clause carries the provenance needed to trust or distrust it: document,
+`CURRENT`/`DEPRECATED`, effective date, account scope, and authority tier.
+
+Chunking is structural rather than fixed-size, and two parser bugs found during
+the build show why that matters:
+
+* a minimum-length filter dropped `P2: 1 hour` — ten characters, and a binding
+  contractual SLA target;
+* KI-208 and KI-211 merged into one chunk, so a citation could no longer point
+  at the specific incident.
+
+Both were caught by the anchor verifier (below) rather than by reading output.
+
+### Why BM25, not a vector database
+
+The corpus is 6 one-page documents → 39 clauses. A vector store would add an
+index, an embedding provider, a network hop and a similarity threshold to tune,
+in exchange for nothing measurable. At this size lexical search with field
+boosts is *more* accurate — real queries contain exact tokens like `PICKED_UP`,
+`KI-208`, `ACCT-001`, `INR 250` — and fully deterministic, which the golden-set
+eval depends on.
+
+What actually determines quality here is **ranking by authority and scope**, not
+the similarity metric:
+
+| Tier | Source | Behaviour |
+|---|---|---|
+| 1 | Signed customer agreement | ×1.6, plus ×1.35 when scoped to this account |
+| 2 | Current policy / SOP | ×1.25 |
+| 3 | Current product documentation | ×1.0 |
+| 4 | Historical tickets, internal notes | context only, never authority |
+| — | Superseded | ×0.05, and filtered out entirely by default |
+
+Account scoping is a **hard filter applied before ranking**: another customer's
+contract clauses are removed from the candidate set, so no prompt can surface them.
+
+`search()` is the seam. Swapping the candidate generator for hybrid BM25 +
+vector recall leaves the authority, scoping and conflict layers untouched — the
+scaling path is written down rather than pre-built.
+
+## Structured-data handling
+
+The workbook is loaded into **SQLite** at startup, not into dataframes. The
+reason is access control: `WHERE account_id = ?` in the data layer is
+enforceable and auditable, whereas filtering a Python list *after* loading
+everything means the unfiltered rows existed in the agent's process, one bug
+away from a leak. It also gives the action tools a real place to write and a
+durable audit table.
+
+Two things are computed, never inferred:
+
+* **Business-hours arithmetic.** Targets come in three units — "30 minutes,
+  24x7", "2 business hours", "1 business day". The snapshot is a **Sunday**, so a
+  business-clock target has not started while a 24x7 one is already breached.
+  The documents never define business hours; the assumption (09:00–18:00 IST,
+  Mon–Fri) is pinned once and reported with every SLA result.
+* **Contract coverage qualifies the whole contract.** LumenWorks' agreement
+  excludes weekend and after-hours support, so *every* target in that agreement
+  runs on the business clock — not just the clause the exclusion sits next to.
+  Applying one clause of a contract while ignoring another is how you produce an
+  answer that is contractually wrong.
+
+## Source reliability and conflict handling
+
+Four mechanisms, in increasing order of how much they cost to build and how much
+they matter:
+
+**1. Tiering and filtering.** Superseded documents never surface as an answer.
+Asking for them explicitly returns them with a loud warning attached.
+
+**2. Conflict detection.** When retrieved clauses speak to the same *normative*
+topic from different tiers, the result carries an explicit conflict record: what
+wins, what yields, and why. Restricted to decision-bearing topics — two
+documents both explaining what `BOOKED` means is not a conflict, and flagging it
+as one trains the reader to ignore the banner.
+
+**3. The rules registry, verified against the documents.** Thresholds live in
+`app/knowledge/rules.yaml` — but every entry carries a `clause_id` and a
+verbatim `anchor`, and **startup re-parses the PDFs and asserts every anchor is
+still present**. Replace a document with a version where a threshold moved, and
+the app refuses to start rather than answering from a stale number. The Docker
+build runs the same check, so a drifted registry fails the build.
+
+`scripts/extract_rules.py` regenerates the registry from the PDFs with Claude,
+rejecting any proposal whose anchor is not verbatim in the cited clause. So
+onboarding a new document is extract → review the diff → promote, not a code
+change — while the serving path still never asks a model what a number is.
+
+**4. Uncertainty as a first-class outcome.** Verdicts carry `confidence`,
+`caveats`, `assumptions`, and `needs_human` with a reason. Unknown carrier fault
+returns `needs_verification`, never a guess in either direction — the SOP
+explicitly forbids promising a credit on unknowns, and that rule is in code.
+
+## Access control
+
+* Row scoping in SQL; field scoping on the way out (`assigned_to`, CSM notes and
+  `historical_resolution` never reach a customer).
+* A customer principal resolves to its own account **regardless of the
+  `account_id` argument the model passes** — the mitigation for a prompt
+  injection inside a ticket description.
+* "Not yours" and "does not exist" are the same message — otherwise the error is
+  an enumeration oracle.
+* Every call audited with principal and outcome, exposed at `/api/audit` and in
+  the UI, because an access-control story you cannot inspect is a claim rather
+  than a control.
+
+## Confirmation before actions
+
+Two-phase commit. Proposal builders validate and preview; `ProposalStore.confirm()`
+is the sole write path and needs a proposal id that only an authenticated
+`POST /api/confirm` supplies. Proposals are single-use (confirming twice does not
+create two escalations), TTL-bounded (a confirmation against a stale preview is
+refused), and bound to the principal *and* session that saw the preview. The
+proposal id is written into the row, so every mutation points back at the
+confirmation that authorised it.
+
+## Major trade-offs
+
+| Decision | Why | What it costs |
+|---|---|---|
+| Deterministic decision engines | Testable, repeatable, auditable; the difference between an answer and a defensible answer | New rule types need code, not just a document. Mitigated by the extraction script |
+| BM25 over a vector store | More accurate at 39 clauses, zero infra, deterministic evals | Would need hybrid recall at ~10³ documents. `search()` is the seam |
+| Rules in YAML, verified at startup | Fast, explicit, reviewable; drift fails loudly | A registry to maintain — which is the point: it is reviewable |
+| SQLite | Real SQL scoping and a durable audit trail, no infra | Single-node. Swap the gateway for Postgres |
+| In-process sessions and proposals | Zero dependencies for a single-instance deployment | Not horizontally scalable. Both are narrow interfaces — Redis is a one-file change |
+| Keyword severity classifier | Transparent, reports its evidence, unit-testable | Brittle on unseen phrasing. The agent can override, and the timing is recomputed |
+| Hand-written agent loop | Per-tool UI events, proposal interception, per-principal auditing | More code than the tool runner |
+| Snapshot-anchored clock | Same question, same answer, every run | Not wired to a real clock — one constructor argument |
+
+## What would be different at production scale
+
+* Hybrid retrieval (BM25 + embeddings) with reranking, past a few hundred documents.
+* Postgres with row-level security, so scoping is enforced by the database rather
+  than by the gateway's discipline.
+* Redis-backed sessions and proposals for horizontal scale.
+* Real OIDC replacing the mocked principal directory — the shape is already right
+  (principal resolved server-side from a session, never a client-supplied account id).
+* The eval harness in CI, gating deploys on the golden set rather than on tests alone.
