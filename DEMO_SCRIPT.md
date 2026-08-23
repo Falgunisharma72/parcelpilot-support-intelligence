@@ -132,7 +132,7 @@ make eval      # 15-case golden set against the live agent
 ```
 
 > "The layer that decides fees and credits is deterministic, so it's unit tested
-> — 96 tests, and none of them need an API key, including the agent loop itself. Every threshold is pinned to a verbatim quote from the
+> — 118 tests, and none of them need an API key, including the agent loop itself. Every threshold is pinned to a verbatim quote from the
 > PDF it came from, and startup re-verifies it: replace a policy with one where a
 > number moved, and the app refuses to start rather than answering from a stale
 > number. And the golden set catches prompt regressions no unit test can.

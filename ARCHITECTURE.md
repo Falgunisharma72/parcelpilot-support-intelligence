@@ -19,7 +19,7 @@ So the central design decision is **where judgement lives**:
 hope the model reasons well. It returns a decided verdict — the fee, the
 calculation, the rule applied, the rule overridden, the citations, the caveats.
 The model narrates it. That one boundary is what makes the system testable
-(69 tests, no API key), repeatable (same input, same answer, every run), and
+(118 tests, no API key), repeatable (same input, same answer, every run), and
 auditable (every number traces to a clause).
 
 ---
@@ -60,12 +60,42 @@ that acceptably; the same model asked to reason unaided about overlapping
 contracts would not. The deterministic core is what buys the cheap model.
 
 Working against free endpoints needs defensiveness that a frontier model does
-not, and it is contained in the adapter rather than leaking into the loop: tool
-arguments arrive as a JSON *string* and are not always valid JSON; `index` on
-streamed tool-call deltas is sometimes absent; `stream_options` is rejected by
-some endpoints; reasoning text appears under two different field names; and a
-model without tool support fails with a 400 that has to become an actionable
-message. `tests/test_providers.py` reproduces each against a mock endpoint.
+not, and it is contained in the adapter rather than leaking into the loop. Each
+of these came from a real run, not from imagination:
+
+* tool arguments arrive as a JSON *string* and are not always valid JSON;
+* `index` on streamed tool-call deltas is sometimes absent;
+* `stream_options` is rejected outright by some endpoints;
+* reasoning text appears under two different field names;
+* optional parameters are sent as explicit `null`, and strict providers reject
+  the whole turn — so optional params declare `["string", "null"]`;
+* **Gemini 3.x attaches a `thought_signature` to every tool call and 400s the
+  next request if it is not echoed back.** This is the same class of problem as
+  replaying Anthropic thinking blocks, which is why the neutral format already
+  carried provider-native data through the round trip: supporting it needed one
+  field on `ToolCall` and two lines in one adapter;
+* a model without tool support fails with a 400 that has to become an actionable
+  message, and a retired model id has to report the catalogue the key can reach.
+
+`tests/test_providers.py` reproduces each against a mock endpoint, including
+throttling and quota exhaustion.
+
+### Fitting inside a free tier
+
+Free tiers meter tokens per minute and count the *requested* `max_tokens`, so
+request size is a correctness concern, not just a cost one. Two consequences:
+
+**The model-facing payload is a projection of the UI-facing one.** The trace
+panel wants every citation in full and each ranking reason; the model needs the
+decision, the arithmetic and a short citation label. Sending one payload to both
+pushed requests past Groq's 8,000-token ceiling. Splitting them halved request
+size and also stopped the model re-deriving an answer from raw clause text when
+a decided verdict was sitting beside it.
+
+**A daily quota is not a burst limit.** Throttling clears in seconds and is
+retried with backoff — but only before the first token reaches the user, since
+retrying after that would duplicate visible output. Quota exhaustion fails
+immediately and names the provider switch.
 
 On Anthropic specifically: adaptive thinking, `effort: high`, and server-side
 refusal fallbacks so a classifier decline routes to a comparable model rather

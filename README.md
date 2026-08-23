@@ -22,8 +22,8 @@ auto-detected from whichever key is present:
 
 | Provider | Free tier | Key |
 |---|---|---|
-| **Groq** — recommended | Generous, no card, very fast | `GROQ_API_KEY` — [console.groq.com/keys](https://console.groq.com/keys) |
-| Google Gemini | Free from AI Studio, no card | `GEMINI_API_KEY` — [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| **Groq** | Fast, no card. 8k tokens/min, 200k/day | `GROQ_API_KEY` — [console.groq.com/keys](https://console.groq.com/keys) |
+| **Google Gemini** | No card. Use the `flash-lite` tier for headroom | `GEMINI_API_KEY` — [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | Cerebras | Free tier, no card | `CEREBRAS_API_KEY` |
 | OpenRouter | Models suffixed `:free` | `OPENROUTER_API_KEY` |
 | Mistral / Together | Free experiment tier / starting credit | `MISTRAL_API_KEY` / `TOGETHER_API_KEY` |
@@ -36,7 +36,7 @@ precedence are decided in code and handed over as finished verdicts — the mode
 picks the right tool and narrates the result. That is a much smaller ask than
 "reason correctly about overlapping contracts", which is where free models fail.
 
-`make test` runs **96 tests and needs no API key at all** — including the full
+`make test` runs **118 tests and needs no API key at all** — including the full
 agent loop, driven by a scripted provider.
 
 ---
@@ -167,17 +167,41 @@ principal *and* session that were shown the preview.
 ## Testing
 
 ```
-make test      # 96 tests, no API key required
+make test      # 118 tests, no API key required
 make verify    # every rule threshold still matches its clause in the PDFs
 make providers # list free providers, and probe that tool calling works
 make eval      # 15-case golden set against the live agent (needs a key)
 ```
 
-The 96 tests include the agent loop itself — tool dispatch, access enforcement,
+The 118 tests include the agent loop itself — tool dispatch, access enforcement,
 the confirmation interrupt, the step guard — driven by a scripted provider, plus
-the OpenAI-compatible adapter against a mock endpoint that reproduces how free
+the OpenAI-compatible adapter against a mock endpoint reproducing how free
 providers actually stream (tool arguments split across deltas, missing `index`,
-malformed JSON). Only `make eval` needs a real key.
+malformed JSON, throttling, quota exhaustion), plus a static contract between
+the HTML, JS and CSS. Only `make eval` needs a real key.
+
+### Operating on a free tier
+
+Both free tiers work, and they fail differently. Worth knowing before you demo:
+
+| | Groq | Gemini free |
+|---|---|---|
+| Limit that bites first | 8,000 **tokens/minute** — and it counts the requested `max_tokens` | daily **request** count |
+| Symptom | `413 Request too large`, then throttling on long chains | hard stop once spent |
+| Mitigation in this repo | compact model-facing payloads, trimmed schemas, `max_tokens` 1600 | default to the `flash-lite` tier |
+
+Two behaviours exist because of this. Requests carry a **compact projection** of
+each tool result — the UI still receives the full payload over SSE, but the
+conversation gets only what the model needs to answer (a document search drops
+from ~2,400 tokens to ~1,200). And a **daily quota is told apart from a burst
+limit**: throttling is retried with backoff, quota exhaustion fails immediately
+and names the provider switch, because backing off 20 seconds at a time for
+every remaining request only reaches the same failure more slowly.
+
+Model ids move. Three pinned defaults went stale during development (Groq
+retired the Llama 3.3 ids; one Gemini key could not serve `gemini-2.5-flash`),
+so the defaults are rolling aliases and a wrong id reports the catalogue your key
+can actually reach. `make providers` is the check.
 
 `make eval` is the one that catches prompt regressions: each case is a question
 with a plausible wrong answer, asserted on the tool the agent reached for, what
@@ -226,7 +250,7 @@ app/
   agent/       tool surface, prompts, provider-neutral streaming loop
   static/      the console UI
   agent/providers/  pluggable model backends (free-tier first)
-tests/         96 tests, no API key needed
+tests/         118 tests, no API key needed
 evals/         golden set + runner
 scripts/       LLM-assisted rules extraction (offline)
 ```

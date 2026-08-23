@@ -35,6 +35,21 @@ Every one of these was found by running the code, not by reading it:
 6. Conflict detection fired on descriptive topic overlap (two documents both
    explaining what `BOOKED` means), which would have trained users to ignore the
    conflict banner.
+7. `app.js` guarded `$("#send")` with a truthiness check against an id that did
+   not exist, so the composer silently never disabled while a turn streamed.
+
+Running the agent against two real free tiers found what no mock would have:
+Gemini 3.x rejects a follow-up request that omits the `thought_signature` from
+the previous tool call; Groq's 8,000-token-per-minute ceiling counts the
+requested `max_tokens`; strict providers reject explicit `null` for optional
+parameters; and a *daily* quota needs different handling from a burst limit.
+Three separate pinned model ids went stale during development.
+
+Two of the bugs were in the eval harness rather than the agent: it matched
+answers byte-literally, so correct answers failed on typographic punctuation
+(U+202F, U+2011) and on synonyms. That is worth stating plainly, because
+loosening your own assertions is also how you fake a passing eval — the
+alternatives are written explicitly in `golden.yaml` for review.
 
 The rules-anchor verifier — the startup check that every threshold still matches
 a verbatim quote in its source PDF — found bugs 1 and 2 by refusing to start. It
