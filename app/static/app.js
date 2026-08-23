@@ -415,8 +415,7 @@ function confirmCard(proposal) {
 
 /* ── streaming ────────────────────────────────────────────────────── */
 async function stream(url, body) {
-  state.busy = true;
-  $("#send") && ($("#send").disabled = true);
+  setBusy(true);
   let msg = null;
   const traceSteps = new Map();
 
@@ -493,9 +492,20 @@ async function stream(url, body) {
   } catch (err) {
     errorLine(String(err));
   } finally {
-    state.busy = false;
+    setBusy(false);
     if (state.principal && state.principal.context === "internal") loadSignals();
   }
+}
+
+/* Disable the composer while a turn streams. `send()` already refuses a second
+   submission via state.busy, so this is about telling the user the request is in
+   flight rather than about preventing one. */
+function setBusy(busy) {
+  state.busy = busy;
+  const button = $("#send");
+  const input = $("#input");
+  if (button) button.disabled = busy;
+  if (input) input.setAttribute("aria-busy", String(busy));
 }
 
 function errorLine(text) {
