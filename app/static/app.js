@@ -43,7 +43,10 @@ const EXAMPLES = {
 async function boot() {
   const data = await (await fetch("/api/bootstrap")).json();
   state.users = data.users;
+  state.model = data.model || {};
   $("#snapshotValue").textContent = data.snapshot;
+  $("#modelValue").textContent = state.model.label || "—";
+  $("#modelValue").classList.toggle("is-free", Boolean(state.model.free));
 
   const sel = $("#userSelect");
   const groups = { customer: "Customer chat", internal: "Internal support" };
@@ -60,11 +63,35 @@ async function boot() {
   sel.value = "staff-rohit";
   sel.addEventListener("change", () => startSession(sel.value));
 
-  if (!data.agent_available) {
-    systemLine("ANTHROPIC_API_KEY is not set — the chat agent is offline. " +
-               "The Signals and Access log views run entirely on the deterministic layer and still work.");
-  }
   await startSession(sel.value);
+  if (!data.agent_available) providerSetupNotice(data.model);
+}
+
+/* No model key configured: say exactly what to do about it, with the free
+   options, rather than a bare "unavailable". */
+function providerSetupNotice(model) {
+  const box = el("div", "msg msg-setup");
+  box.appendChild(el("h3", null, "Add a model key to enable the chat"));
+  box.appendChild(el("p", null,
+    "Everything deterministic already works — open Signals for the 13 detected " +
+    "findings, or Access log for the enforcement trail. The chat needs one API key, " +
+    "and every option below has a free tier."));
+  const list = el("ul", "provider-list");
+  (model.free_options || []).forEach((p) => {
+    const li = el("li");
+    const a = el("a", null, p.label);
+    a.href = p.signup; a.target = "_blank"; a.rel = "noopener";
+    li.appendChild(a);
+    li.appendChild(el("span", "provider-free", p.free));
+    li.appendChild(el("code", null, `${p.env_key}=…`));
+    list.appendChild(li);
+  });
+  box.appendChild(list);
+  box.appendChild(el("p", "provider-hint",
+    "Put the key in .env, restart, and the provider is detected automatically. " +
+    "Run `make providers` to check it works."));
+  $("#thread").appendChild(box);
+  scroll();
 }
 
 async function startSession(userId) {

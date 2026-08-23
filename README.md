@@ -12,12 +12,32 @@ the workbook into a scoped SQLite database at startup.
 ```
 git clone <this repo> && cd parcelpilot
 make setup                       # venv + dependencies
-cp .env.example .env             # add ANTHROPIC_API_KEY
+cp .env.example .env             # paste ONE free API key (see below)
+make providers                   # confirms it works, incl. tool calling
 make run                         # http://localhost:8000
 ```
 
-`make test` runs 69 tests and needs **no API key** — the layer that decides fees,
-credits and SLA breaches is deterministic and testable on its own.
+**It runs entirely on a free tier.** The model backend is pluggable and
+auto-detected from whichever key is present:
+
+| Provider | Free tier | Key |
+|---|---|---|
+| **Groq** — recommended | Generous, no card, very fast | `GROQ_API_KEY` — [console.groq.com/keys](https://console.groq.com/keys) |
+| Google Gemini | Free from AI Studio, no card | `GEMINI_API_KEY` — [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| Cerebras | Free tier, no card | `CEREBRAS_API_KEY` |
+| OpenRouter | Models suffixed `:free` | `OPENROUTER_API_KEY` |
+| Mistral / Together | Free experiment tier / starting credit | `MISTRAL_API_KEY` / `TOGETHER_API_KEY` |
+| Ollama | Free forever, local, no key at all | `ollama pull qwen2.5:7b` |
+| Anthropic | Paid — optional, not required | `ANTHROPIC_API_KEY` |
+
+A free 70B model is enough here *because the model does not compute anything*.
+Fees, credit amounts, elapsed times, SLA clocks and contract-versus-policy
+precedence are decided in code and handed over as finished verdicts — the model
+picks the right tool and narrates the result. That is a much smaller ask than
+"reason correctly about overlapping contracts", which is where free models fail.
+
+`make test` runs **96 tests and needs no API key at all** — including the full
+agent loop, driven by a scripted provider.
 
 ---
 
@@ -63,8 +83,9 @@ credits and SLA breaches is deterministic and testable on its own.
                        └───────────────┬──────────────────────────┘
                                        │
                         ┌──────────────▼───────────────┐
-                        │  Agent loop (Claude Opus 5)  │   judgement, wording,
-                        │  streams tool events         │   when to escalate
+                        │  Provider-neutral agent loop │   judgement, wording,
+                        │  Groq / Gemini / OpenRouter  │   when to escalate
+                        │  Cerebras / Ollama / Claude  │
                         └──────────────┬───────────────┘
                                        │  12 tools, filtered by permission
       ┌────────────────┬───────────────┼────────────────┬──────────────────┐
@@ -146,10 +167,17 @@ principal *and* session that were shown the preview.
 ## Testing
 
 ```
-make test      # 69 tests, no API key required
+make test      # 96 tests, no API key required
 make verify    # every rule threshold still matches its clause in the PDFs
+make providers # list free providers, and probe that tool calling works
 make eval      # 15-case golden set against the live agent (needs a key)
 ```
+
+The 96 tests include the agent loop itself — tool dispatch, access enforcement,
+the confirmation interrupt, the step guard — driven by a scripted provider, plus
+the OpenAI-compatible adapter against a mock endpoint that reproduces how free
+providers actually stream (tool arguments split across deltas, missing `index`,
+malformed JSON). Only `make eval` needs a real key.
 
 `make eval` is the one that catches prompt regressions: each case is a question
 with a plausible wrong answer, asserted on the tool the agent reached for, what
@@ -195,9 +223,10 @@ app/
   knowledge/   retrieval + ranking; rules.yaml + anchor verification
   core/        principals & permissions, scoped gateway, business-time, proposals
   engine/      cancellation, credits, severity, SLA, signals
-  agent/       tool surface, prompts, streaming loop
+  agent/       tool surface, prompts, provider-neutral streaming loop
   static/      the console UI
-tests/         69 tests, no API key needed
+  agent/providers/  pluggable model backends (free-tier first)
+tests/         96 tests, no API key needed
 evals/         golden set + runner
 scripts/       LLM-assisted rules extraction (offline)
 ```

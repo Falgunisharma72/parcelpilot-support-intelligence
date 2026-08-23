@@ -18,8 +18,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.agent.loop import Agent, Session
+from app.agent.providers import ProviderError, build_provider, describe
 from app.agent.tools import ToolRuntime, tool_catalogue
-from app.config import ANTHROPIC_API_KEY, MODEL, fmt
+from app.config import fmt
 from app.core.db import get_gateway
 from app.core.principal import (
     DEMO_USERS, AccessDenied, Perm, resolve_principal,
@@ -43,16 +44,14 @@ _sessions: dict[str, Session] = {}
 
 
 def agent() -> Agent:
+    """Build the agent lazily, so the app still serves the deterministic views
+    (signals, access log, documents) when no model provider is configured."""
     global _agent
     if _agent is None:
-        if not ANTHROPIC_API_KEY:
-            raise HTTPException(
-                status_code=503,
-                detail=("ANTHROPIC_API_KEY is not set. The deterministic layers (documents, "
-                        "rules, decisions, signals) work without it - see /api/signals and "
-                        "`make test` - but the chat agent needs a key."),
-            )
-        _agent = Agent(_runtime, api_key=ANTHROPIC_API_KEY)
+        try:
+            _agent = Agent(_runtime, provider=build_provider())
+        except ProviderError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
     return _agent
 
 
@@ -86,10 +85,11 @@ def _session(session_id: str) -> Session:
 # ---------------------------------------------------------------------------
 @app.get("/api/health")
 def health() -> dict:
+    model = describe()
     return {
         "status": "ok",
-        "model": MODEL,
-        "agent_available": bool(ANTHROPIC_API_KEY),
+        "model": model,
+        "agent_available": model["configured"],
         "snapshot": fmt(_gateway.clock.now()),
         "documents": len({c.doc_id for c in _index.clauses}),
         "clauses": len(_index.clauses),
@@ -110,11 +110,12 @@ def bootstrap() -> dict:
             "context": principal.context,
             "tools": tool_catalogue(principal),
         })
+    model = describe()
     return {
         "users": users,
         "snapshot": fmt(_gateway.clock.now()),
-        "model": MODEL,
-        "agent_available": bool(ANTHROPIC_API_KEY),
+        "model": model,
+        "agent_available": model["configured"],
         "documents": sorted({c.doc_id for c in _index.clauses}),
     }
 

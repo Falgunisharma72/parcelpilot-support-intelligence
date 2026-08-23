@@ -52,12 +52,19 @@ BUSINESS_HOURS_ASSUMPTION = (
 # ---------------------------------------------------------------------------
 # Model configuration
 # ---------------------------------------------------------------------------
-MODEL = os.getenv("PARCELPILOT_MODEL", "claude-opus-5")
-MAX_TOKENS = int(os.getenv("PARCELPILOT_MAX_TOKENS", "8000"))
-EFFORT = os.getenv("PARCELPILOT_EFFORT", "high")
+# The model backend is pluggable and free-tier first - see app/agent/providers.
+# Set any one of GROQ_API_KEY / GEMINI_API_KEY / CEREBRAS_API_KEY /
+# OPENROUTER_API_KEY / MISTRAL_API_KEY / TOGETHER_API_KEY / ANTHROPIC_API_KEY,
+# or run Ollama locally, and the provider is auto-detected.
+#
+# PARCELPILOT_PROVIDER forces a specific one; PARCELPILOT_MODEL overrides its
+# default model. Neither is required.
+PROVIDER = os.getenv("PARCELPILOT_PROVIDER")
+MODEL = os.getenv("PARCELPILOT_MODEL")
+MAX_TOKENS = int(os.getenv("PARCELPILOT_MAX_TOKENS", "4096"))
+EFFORT = os.getenv("PARCELPILOT_EFFORT", "high")          # Anthropic only
 SHOW_THINKING = os.getenv("PARCELPILOT_SHOW_THINKING", "1") not in ("0", "false", "")
 MAX_AGENT_STEPS = int(os.getenv("PARCELPILOT_MAX_AGENT_STEPS", "12"))
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 # Proposals (pending state-changing actions) expire; a stale confirmation is a
 # confirmation against facts the user never actually saw.
@@ -112,8 +119,8 @@ def humanise_minutes(minutes: float) -> str:
 __all__ = [
     "ROOT", "DATA_DIR", "DOCS_DIR", "WORKBOOK", "RULES_FILE", "BUILD_DIR", "TZ",
     "DEFAULT_SNAPSHOT", "Clock", "parse_ts", "fmt", "humanise_minutes",
-    "MODEL", "MAX_TOKENS", "EFFORT", "SHOW_THINKING", "MAX_AGENT_STEPS",
-    "ANTHROPIC_API_KEY", "PROPOSAL_TTL_SECONDS", "BUSINESS_HOURS_ASSUMPTION",
+    "PROVIDER", "MODEL", "MAX_TOKENS", "EFFORT", "SHOW_THINKING",
+    "MAX_AGENT_STEPS", "PROPOSAL_TTL_SECONDS", "BUSINESS_HOURS_ASSUMPTION",
     "BUSINESS_DAY_START_HOUR", "BUSINESS_DAY_END_HOUR", "BUSINESS_WEEKDAYS",
     "timedelta", "timezone",
 ]

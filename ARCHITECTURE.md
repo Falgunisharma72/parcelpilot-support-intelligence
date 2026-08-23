@@ -26,8 +26,8 @@ auditable (every number traces to a clause).
 
 ## Agent design
 
-A hand-written agentic loop over `client.beta.messages.stream` rather than the
-SDK's tool runner. Three requirements drove that:
+A hand-written, **provider-neutral** agentic loop rather than an SDK helper.
+Three requirements drove that:
 
 1. The UI shows **which tool is running, as it runs** — so the loop emits an
    event before executing, not after.
@@ -37,12 +37,40 @@ SDK's tool runner. Three requirements drove that:
 3. Every tool call is audited **with the calling principal**, so the loop owns
    the principal rather than each tool function closing over it.
 
-Model is `claude-opus-5` with adaptive thinking (summarised, streamed into a
-collapsible panel) and `effort: high`. Server-side refusal fallbacks are enabled
-so a classifier decline routes to a comparable model instead of dead-ending a
-support user; `stop_reason == "refusal"` is handled explicitly rather than read
-as an answer. The loop is capped at 12 steps and degrades to a plain error that
-says nothing was changed.
+The loop is capped at 12 steps and degrades to a plain error that says nothing
+was changed.
+
+### The provider layer
+
+The loop speaks a neutral conversation format, and each backend adapts it. One
+adapter covers Anthropic; a second covers the OpenAI chat-completions dialect,
+which Groq, Gemini, OpenRouter, Cerebras, Mistral, Together and a local Ollama
+all speak — so every free option is one integration, not seven. The provider is
+auto-detected from whichever key is present.
+
+Why neutral rather than "just use the OpenAI shape everywhere": Anthropic's
+thinking blocks must be replayed byte-identical on the next turn and the OpenAI
+shape has nowhere to put them. So each assistant turn carries an optional
+provider-native `raw` payload that the loop never looks inside.
+
+**This is the decision that makes a free tier viable.** Because the model never
+computes a fee, an elapsed time or a precedence outcome, its job reduces to
+picking the right tool and narrating a finished verdict. A free 70B model does
+that acceptably; the same model asked to reason unaided about overlapping
+contracts would not. The deterministic core is what buys the cheap model.
+
+Working against free endpoints needs defensiveness that a frontier model does
+not, and it is contained in the adapter rather than leaking into the loop: tool
+arguments arrive as a JSON *string* and are not always valid JSON; `index` on
+streamed tool-call deltas is sometimes absent; `stream_options` is rejected by
+some endpoints; reasoning text appears under two different field names; and a
+model without tool support fails with a 400 that has to become an actionable
+message. `tests/test_providers.py` reproduces each against a mock endpoint.
+
+On Anthropic specifically: adaptive thinking, `effort: high`, and server-side
+refusal fallbacks so a classifier decline routes to a comparable model rather
+than dead-ending a support user. `stop_reason == "refusal"` is handled
+explicitly rather than read as an answer.
 
 **One agent, two contexts.** The customer and internal assistants share the core
 and differ in three places: the principal, the tool list (9 vs 12), and the
@@ -202,7 +230,7 @@ confirmation that authorised it.
 | SQLite | Real SQL scoping and a durable audit trail, no infra | Single-node. Swap the gateway for Postgres |
 | In-process sessions and proposals | Zero dependencies for a single-instance deployment | Not horizontally scalable. Both are narrow interfaces — Redis is a one-file change |
 | Keyword severity classifier | Transparent, reports its evidence, unit-testable | Brittle on unseen phrasing. The agent can override, and the timing is recomputed |
-| Hand-written agent loop | Per-tool UI events, proposal interception, per-principal auditing | More code than the tool runner |
+| Hand-written, provider-neutral loop | Per-tool UI events, proposal interception, per-principal auditing — and the whole agent runs on a free tier and is testable with a scripted provider | More code than an SDK tool runner, plus one adapter per dialect |
 | Snapshot-anchored clock | Same question, same answer, every run | Not wired to a real clock — one constructor argument |
 
 ## What would be different at production scale

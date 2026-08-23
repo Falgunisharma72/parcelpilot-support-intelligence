@@ -18,5 +18,7 @@ issue detection.
 
 Source and full write-up: https://github.com/Falgunisharma72/parcelpilot-support-intelligence
 
-Set `ANTHROPIC_API_KEY` as a Space **secret** to enable the chat agent. The
+Set any one free model key as a Space **secret** to enable the chat agent —
+`GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `CEREBRAS_API_KEY` or
+`MISTRAL_API_KEY`. The
 Signals and Access log views run on the deterministic layer and work without it.

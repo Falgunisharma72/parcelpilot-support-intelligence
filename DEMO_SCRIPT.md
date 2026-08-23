@@ -132,10 +132,16 @@ make eval      # 15-case golden set against the live agent
 ```
 
 > "The layer that decides fees and credits is deterministic, so it's unit tested
-> — 69 tests, no API key. Every threshold is pinned to a verbatim quote from the
+> — 96 tests, and none of them need an API key, including the agent loop itself. Every threshold is pinned to a verbatim quote from the
 > PDF it came from, and startup re-verifies it: replace a policy with one where a
 > number moved, and the app refuses to start rather than answering from a stale
 > number. And the golden set catches prompt regressions no unit test can.
+>
+> One more thing that falls out of that design: the model never computes
+> anything, so it doesn't need to be a frontier model. This is running on a free
+> tier — swap the key and it runs on Groq, Gemini, Cerebras or a local Ollama.
+> The wording gets a little plainer; the decisions are identical, because they
+> were never the model's to get wrong.
 >
 > That's what makes this something you could actually put in front of customers."
 

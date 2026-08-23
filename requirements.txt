@@ -1,3 +1,8 @@
+# The model backend is pluggable. `openai` is the client for every
+# OpenAI-compatible endpoint (Groq, Gemini, OpenRouter, Cerebras, Mistral,
+# Together, Ollama) - which is how the whole system runs on a free tier.
+# `anthropic` is only imported if you actually select that provider.
+openai==3.3.1
 anthropic==1.0.0
 fastapi==0.141.1
 uvicorn[standard]==0.52.4

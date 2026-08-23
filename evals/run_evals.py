@@ -23,8 +23,8 @@ from pathlib import Path
 import yaml
 
 from app.agent.loop import Agent, Session
+from app.agent.providers import ProviderError, build_provider
 from app.agent.tools import ToolRuntime
-from app.config import ANTHROPIC_API_KEY, MODEL
 from app.core.db import DataGateway
 from app.core.principal import resolve_principal
 from app.core.proposals import ProposalStore
@@ -97,9 +97,12 @@ def main() -> int:
     parser.add_argument("--verbose", action="store_true", help="Print every answer")
     args = parser.parse_args()
 
-    if not ANTHROPIC_API_KEY:
-        print("ANTHROPIC_API_KEY is not set. The engine tests (`make test`) run without "
-              "a key; this harness needs one because it exercises the live agent.")
+    try:
+        provider = build_provider()
+    except ProviderError as exc:
+        print(f"{exc}\n\nThe engine tests (`make test`) run without any key; this "
+              "harness needs one because it exercises the live agent. "
+              "Run `make providers` for the free options.")
         return 2
 
     cases = yaml.safe_load(GOLDEN.read_text())["cases"]
@@ -111,9 +114,9 @@ def main() -> int:
 
     gateway = DataGateway()
     runtime = ToolRuntime(gateway, get_rules(), ClauseIndex(), ProposalStore())
-    agent = Agent(runtime, api_key=ANTHROPIC_API_KEY)
+    agent = Agent(runtime, provider=provider)
 
-    print(f"\n  ParcelPilot golden set · {len(cases)} cases · {MODEL}\n")
+    print(f"\n  ParcelPilot golden set · {len(cases)} cases · {provider.label}\n")
     results = []
     for case in cases:
         result = run_case(agent, gateway, case)
@@ -135,8 +138,8 @@ def main() -> int:
 
     if args.json:
         Path(args.json).write_text(json.dumps(
-            {"model": MODEL, "passed": passed, "total": total, "results": results},
-            indent=2))
+            {"provider": provider.label, "passed": passed, "total": total,
+             "results": results}, indent=2))
         print(f"  report written to {args.json}\n")
 
     return 0 if passed == total else 1

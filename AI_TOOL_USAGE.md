@@ -58,5 +58,10 @@ system is built around.
 
 ### Other tools
 
-`Claude Opus 5` is also the model the running application uses. Google Drive's
-MCP connector was used to pull the candidate data pack.
+Google Drive's MCP connector was used to pull the candidate data pack.
+
+The running application does **not** depend on Claude. Its model backend is
+pluggable and free-tier first — Groq, Gemini, Cerebras, OpenRouter, Mistral,
+Together or a local Ollama — because the deterministic core means the model is
+narrating verdicts rather than deriving them, so a free 70B model is sufficient.
+Anthropic is one supported provider among several, not a requirement.

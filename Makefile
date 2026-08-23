@@ -2,12 +2,13 @@ VENV := .venv
 PY   := $(VENV)/bin/python
 PIP  := $(VENV)/bin/pip
 
-.PHONY: help setup run test eval eval-verbose lint clean docker docker-run verify
+.PHONY: help setup run test eval eval-verbose providers lint clean docker docker-run verify
 
 help:
 	@echo "make setup     - create the venv and install dependencies"
 	@echo "make run       - start the app on http://localhost:8000"
 	@echo "make test      - run the test suite (no API key needed)"
+	@echo "make providers - list free model providers and test the active one"
 	@echo "make verify    - check the rules registry against the document pack"
 	@echo "make eval      - run the golden set against the live agent (needs a key)"
 	@echo "make docker    - build the container image"
@@ -16,7 +17,7 @@ setup:
 	python3 -m venv $(VENV)
 	$(PIP) install -q --upgrade pip
 	$(PIP) install -q -r requirements-dev.txt
-	@echo "ready. copy .env.example to .env and add your key, then: make run"
+	@echo "ready. copy .env.example to .env and add ONE free key (make providers), then: make run"
 
 run:
 	$(VENV)/bin/uvicorn app.api:app --reload --port 8000
@@ -28,6 +29,9 @@ verify:
 	$(PY) -c "from app.knowledge.rules import get_rules; p=get_rules().verify(); \
 	print('\n'.join(p) if p else 'rules verified: every threshold still matches its clause in the PDFs')"
 
+providers:
+	$(PY) -m scripts.check_provider
+
 eval:
 	$(PY) -m evals.run_evals
 
@@ -38,7 +42,7 @@ docker:
 	docker build -t parcelpilot-support .
 
 docker-run:
-	docker run --rm -p 8000:8000 -e ANTHROPIC_API_KEY=$$ANTHROPIC_API_KEY parcelpilot-support
+	docker run --rm -p 8000:8000 --env-file .env parcelpilot-support
 
 clean:
 	rm -rf .build .pytest_cache report.json

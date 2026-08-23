@@ -100,6 +100,15 @@ check" into decided answers.
 
 ## What I intentionally left out
 
+* **A hard dependency on a frontier model.** The backend is pluggable and runs on
+  a free tier — Groq, Gemini, Cerebras, OpenRouter, Mistral or a local Ollama.
+  That is a product decision, not a cost saving: it is only possible *because*
+  the deterministic core reduces the model's job to picking a tool and narrating
+  a verdict, and it means a 20-person support team can run this without a model
+  budget or a procurement conversation. The quality ceiling on the wording is
+  lower than on a frontier model; the correctness of the decisions is identical,
+  because they are not the model's to get wrong.
+
 * **A vector database.** 39 clauses. It would have added infrastructure and
   non-determinism to the eval set to solve a problem this corpus does not have.
   The scaling path is documented, and `search()` is the seam.
