@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY data ./data
 COPY evals ./evals
+COPY scripts ./scripts
 
 # Parse the PDFs and verify every rule anchor at build time. If the document
 # pack and the rules registry have drifted apart, the image fails to build

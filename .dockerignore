@@ -1,0 +1,18 @@
+# Keep the build context small and free of secrets. Without this the whole
+# .venv (hundreds of MB) and the local .env are uploaded to the Docker daemon
+# on every build - slow, and one careless COPY away from baking a key into an
+# image layer.
+.venv/
+.build/
+.git/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.db
+report.json
+deploy/
+*.md
+!README.md
