@@ -24,7 +24,7 @@ from typing import Iterator
 import openai
 
 from app.agent.providers.base import (
-    Message, ProviderError, ToolCall, Turn, safe_json,
+    Message, ProviderError, QuotaExhausted, ToolCall, Turn, safe_json,
 )
 
 
@@ -78,11 +78,8 @@ class OpenAICompatProvider:
                 turn = msg.turn
                 entry: dict = {"role": "assistant", "content": turn.text or ""}
                 if turn.tool_calls:
-                    entry["tool_calls"] = [{
-                        "id": tc.id, "type": "function",
-                        "function": {"name": tc.name,
-                                     "arguments": _dump(tc.input)},
-                    } for tc in turn.tool_calls]
+                    entry["tool_calls"] = [
+                        _tool_call_wire(tc) for tc in turn.tool_calls]
                 wire.append(entry)
             else:
                 # One `tool` message per result, each tied to its call id.
@@ -166,9 +163,16 @@ class OpenAICompatProvider:
 
                 for tc in (getattr(delta, "tool_calls", None) or []):
                     idx = tc.index if tc.index is not None else len(pending)
-                    slot = pending.setdefault(idx, {"id": "", "name": "", "args": ""})
+                    slot = pending.setdefault(idx, {"id": "", "name": "", "args": "",
+                                                    "extra": None})
                     if tc.id:
                         slot["id"] = tc.id
+                    # Carry provider-specific data (Gemini's thought_signature)
+                    # through untouched; the next request is rejected without it.
+                    extra = getattr(tc, "extra_content", None)
+                    if extra is not None:
+                        slot["extra"] = (extra if isinstance(extra, dict)
+                                         else extra.model_dump())
                     fn = getattr(tc, "function", None)
                     if fn is not None:
                         if fn.name:
@@ -191,10 +195,21 @@ class OpenAICompatProvider:
                 "still active. Nothing was changed."
             ) from exc
         except openai.RateLimitError as exc:
+            # A per-minute limit clears in seconds and is worth retrying. A
+            # daily quota does not, and grinding through the backoff for every
+            # remaining request wastes minutes to reach the same failure. Tell
+            # them apart and fail fast on the one that will not recover.
+            detail = _first_line(exc)
+            retry_after = _retry_after(exc)
+            if _is_quota_exhausted(detail, retry_after):
+                raise QuotaExhausted(
+                    f"{self.id} free-tier quota is exhausted, not merely throttled: "
+                    f"{detail} Switch provider with PARCELPILOT_PROVIDER, or wait for "
+                    "the quota window to reset. Nothing was changed."
+                ) from exc
             raise _Transient(
-                f"{self.id} free-tier rate limit reached. Wait a moment and retry, "
-                "or switch provider with PARCELPILOT_PROVIDER. Nothing was changed.",
-                retry_after=_retry_after(exc),
+                f"{self.id} rate limit: {detail} Nothing was changed.",
+                retry_after=retry_after,
             ) from exc
         except openai.APIConnectionError as exc:
             raise _Transient(
@@ -222,7 +237,8 @@ class OpenAICompatProvider:
                 continue
             calls.append(ToolCall(id=slot["id"] or ToolCall.new_id(),
                                   name=slot["name"],
-                                  input=safe_json(slot["args"])))
+                                  input=safe_json(slot["args"]),
+                                  extra=slot.get("extra")))
 
         turn = Turn(
             text="".join(text_parts),
@@ -262,10 +278,48 @@ class OpenAICompatProvider:
                 "`make providers`.")
 
     def list_models(self) -> list[str]:
+        """Model ids this key can reach, in the form the API actually accepts.
+
+        Gemini lists ids as "models/gemini-flash-latest" but only accepts the
+        bare name, so echoing the catalogue verbatim produced a suggestion that
+        404s just as hard as the original mistake. Only that one prefix is
+        stripped - Groq ids legitimately contain a slash ("openai/gpt-oss-120b"),
+        and trimming those would break a suggestion that was already correct.
+        """
         try:
-            return sorted(m.id for m in self.client.models.list().data)
+            return sorted(_strip_models_prefix(m.id)
+                          for m in self.client.models.list().data)
         except Exception:                                    # noqa: BLE001
             return []
+
+
+# Anything longer than this is a quota window, not a burst limit.
+_RETRY_SOON_SECONDS = 90
+
+_QUOTA_MARKERS = (
+    "per day", "tokens per day", "requests per day", "tpd", "rpd",
+    "daily", "exceeded your current quota", "quota exceeded",
+    "free_tier_requests",
+)
+
+
+def _is_quota_exhausted(detail: str, retry_after: float | None) -> bool:
+    if retry_after and retry_after > _RETRY_SOON_SECONDS:
+        return True
+    low = detail.lower()
+    return any(marker in low for marker in _QUOTA_MARKERS)
+
+
+def _tool_call_wire(tc) -> dict:
+    entry = {"id": tc.id, "type": "function",
+             "function": {"name": tc.name, "arguments": _dump(tc.input)}}
+    if tc.extra:
+        entry["extra_content"] = tc.extra
+    return entry
+
+
+def _strip_models_prefix(model_id: str) -> str:
+    return model_id[len("models/"):] if model_id.startswith("models/") else model_id
 
 
 class _Transient(RuntimeError):

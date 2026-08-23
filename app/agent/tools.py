@@ -44,14 +44,11 @@ TOOL_SPECS: list[dict] = [
         "permission": None,
         "category": "documents",
         "description": (
-            "Search ParcelPilot's policies, SOPs, product documentation and customer "
-            "agreements. Results are ranked by authority as well as relevance: a signed "
-            "customer agreement outranks the general policy, which outranks product "
-            "documentation. Superseded documents are excluded unless explicitly requested, "
-            "and clauses belonging to another customer's agreement are never returned. "
-            "Each result carries its authority tier and a citation. Use this for questions "
-            "about what the rules say. For an actual cancellation, credit or SLA decision, "
-            "prefer the check_* tools, which apply these rules deterministically."
+            "Search policies, SOPs, product docs and customer agreements. Ranked by "
+            "authority (signed agreement > current policy > product docs); superseded "
+            "documents and other customers' contracts are never returned. Use for what "
+            "the rules SAY. For a cancellation, credit or SLA decision use the check_* "
+            "tools instead - they apply these rules exactly."
         ),
         "input_schema": {
             "type": "object",
@@ -80,11 +77,9 @@ TOOL_SPECS: list[dict] = [
         "permission": None,
         "category": "data",
         "description": (
-            "Return the account in context: plan, status, whether a signed agreement "
-            "exists, and the contractual overrides that apply to it (support targets, "
-            "cancellation terms, service-credit terms). Call this early - almost every "
-            "policy answer depends on whether this account has a contract that displaces "
-            "the general rules."
+            "The account in context: plan, status and any contractual overrides (support "
+            "targets, cancellation and service-credit terms). Call early - most answers "
+            "depend on whether a contract displaces the general rules."
         ),
         "input_schema": {
             "type": "object",
@@ -102,9 +97,8 @@ TOOL_SPECS: list[dict] = [
         "permission": None,
         "category": "data",
         "description": (
-            "Look up shipment orders: a single order by id, or a filtered list. Returns "
-            "status, booking time, pickup window, actual pickup, fee, and recorded fault "
-            "attribution. Scoped to the caller's account automatically."
+            "Look up orders by id or filter: status, booking time, pickup window, actual "
+            "pickup, fee, fault attribution. Auto-scoped to the caller."
         ),
         "input_schema": {
             "type": "object",
@@ -121,10 +115,9 @@ TOOL_SPECS: list[dict] = [
         "permission": None,
         "category": "data",
         "description": (
-            "Look up support tickets by id, by filter, or by free-text search over subject "
-            "and description. Note: the historical_resolution field on closed tickets is "
-            "what a past agent told the customer. It is context only and may be wrong - "
-            "never treat it as policy, and check it against current rules before repeating it."
+            "Look up tickets by id, filter, or free-text search. Note: historical_resolution "
+            "on closed tickets is what a past agent said - context only, and may be WRONG. "
+            "Verify against current rules before repeating it."
         ),
         "input_schema": {
             "type": "object",
@@ -141,11 +134,9 @@ TOOL_SPECS: list[dict] = [
         "permission": None,
         "category": "decision",
         "description": (
-            "Decide whether a specific order can be cancelled and what fee, if any, applies. "
-            "Resolves the account's signed agreement against the general SOP, measures the "
-            "elapsed time from booking to the cancellation request, and returns a verdict "
-            "with the full calculation, the rule applied, the rule overridden, and citations. "
-            "Use this instead of reasoning about cancellation terms yourself."
+            "Decide whether an order can be cancelled and what fee applies. Resolves "
+            "contract against SOP, does the timing arithmetic, and returns a verdict with "
+            "its calculation and citations. Use this rather than reasoning it out yourself."
         ),
         "input_schema": {
             "type": "object",
@@ -158,12 +149,11 @@ TOOL_SPECS: list[dict] = [
         "permission": None,
         "category": "decision",
         "description": (
-            "Decide failed-pickup service-credit eligibility and amount for this account. "
-            "Works two ways: pass order_id for a binding answer on a real order, or pass the "
-            "stated facts (hours_past_window_end, carrier_fault, customer_fault, optionally "
-            "shipment_fee_inr) for a hypothetical - which is still resolved against this "
-            "account's own contract, not a generic policy. Different accounts have different "
-            "delay thresholds and amounts, so never answer this from memory."
+            "Decide failed-pickup service-credit eligibility and amount. Pass order_id for a "
+            "real order, or the stated facts (hours_past_window_end, carrier_fault, "
+            "customer_fault, shipment_fee_inr) for a hypothetical - either way it resolves "
+            "against THIS account's contract. Thresholds and amounts differ per account, so "
+            "never answer from memory."
         ),
         "input_schema": {
             "type": "object",
@@ -185,12 +175,10 @@ TOOL_SPECS: list[dict] = [
         "permission": None,
         "category": "decision",
         "description": (
-            "Classify a ticket's severity against the current policy definitions and compute "
-            "its first-response target, due time and breach state. Applies the account's "
-            "contractual targets where they exist, and handles the difference between 24x7 "
-            "and business-hours clocks. Pass severity_override if you have judged the "
-            "severity differently from the automatic classification - the timing is then "
-            "recomputed for that severity."
+            "Classify a ticket's severity and compute its first-response target, due time and "
+            "breach state - using contractual targets where they exist and the correct 24x7 "
+            "vs business-hours clock. Pass severity_override to recompute for a severity you "
+            "judged differently."
         ),
         "input_schema": {
             "type": "object",
@@ -206,10 +194,9 @@ TOOL_SPECS: list[dict] = [
         "permission": None,
         "category": "documents",
         "description": (
-            "Match a problem description against ParcelPilot's current known issues and "
-            "their workarounds. Call this before diagnosing any reported product problem: "
-            "a known issue with a documented workaround is a very different answer from a "
-            "plan limitation or a one-off bug."
+            "Match a reported symptom against current known issues and their workarounds. "
+            "Call BEFORE diagnosing any product problem - a known issue is a very different "
+            "answer from a plan limit or a one-off bug."
         ),
         "input_schema": {
             "type": "object",
@@ -252,11 +239,10 @@ TOOL_SPECS: list[dict] = [
         "category": "action",
         "state_changing": True,
         "description": (
-            "Prepare an escalation to the human support team for confirmation. This does "
-            "NOT create it - it returns a preview that the user must explicitly confirm. "
-            "Use when the request needs human judgement, an exception to policy, an action "
+            "Prepare an escalation for the user to confirm. Does NOT create it - returns a "
+            "preview to approve. Use for: human judgement, a policy exception, an action "
             "outside this system, a P1, a breached SLA, a credit above the approval "
-            "threshold, or when sources conflict and the facts cannot be established."
+            "threshold, or unresolvable conflicting sources."
         ),
         "input_schema": {
             "type": "object",
@@ -279,9 +265,8 @@ TOOL_SPECS: list[dict] = [
         "category": "action",
         "state_changing": True,
         "description": (
-            "Internal only. Prepare a change to a ticket's status or assignee for "
-            "confirmation. Returns a before/after preview; nothing is written until the "
-            "user confirms."
+            "Internal only. Prepare a ticket status/assignee change for confirmation. Returns "
+            "a before/after preview; nothing is written until the user confirms."
         ),
         "input_schema": {
             "type": "object",
@@ -300,9 +285,9 @@ TOOL_SPECS: list[dict] = [
         "category": "action",
         "state_changing": True,
         "description": (
-            "Internal only. Prepare a follow-up task for confirmation - for example to "
-            "correct guidance a customer was previously given, chase a carrier, or verify "
-            "a fact before promising a credit. Nothing is written until the user confirms."
+            "Internal only. Prepare a follow-up task for confirmation - e.g. correct guidance "
+            "a customer was given, chase a carrier, verify a fact. Nothing is written until "
+            "the user confirms."
         ),
         "input_schema": {
             "type": "object",
@@ -319,6 +304,28 @@ TOOL_SPECS: list[dict] = [
     },
 ]
 
+def _allow_null_on_optional(spec: dict) -> dict:
+    """Let optional string/number params accept an explicit null.
+
+    Models routinely fill every declared parameter, passing `null` for the ones
+    they have no value for. Strict providers validate tool arguments against the
+    schema and reject the call outright - Groq fails the whole turn with
+    "`/ticket_id`: expected string, but got null". Widening optional types is
+    the difference between a working agent and one that dies whenever it omits
+    an argument.
+    """
+    schema = spec.get("input_schema") or {}
+    required = set(schema.get("required", []))
+    for name, prop in (schema.get("properties") or {}).items():
+        if name in required:
+            continue
+        kind = prop.get("type")
+        if isinstance(kind, str) and kind != "null":
+            prop["type"] = [kind, "null"]
+    return spec
+
+
+TOOL_SPECS = [_allow_null_on_optional(t) for t in TOOL_SPECS]
 TOOL_BY_NAME = {t["name"]: t for t in TOOL_SPECS}
 STATE_CHANGING = {t["name"] for t in TOOL_SPECS if t.get("state_changing")}
 
@@ -422,6 +429,9 @@ class ToolRuntime:
             # Re-checked here even though the tool was filtered out of the
             # schema: never rely on the model only calling what it was offered.
             principal.require(perm, f"use {name}")
+        # A null argument means "not supplied"; drop it so every handler can use
+        # plain `args.get(...)` truthiness without null-checking each field.
+        args = {k: v for k, v in (args or {}).items() if v is not None}
         handler: Callable = getattr(self, f"_t_{name}")
         return handler(principal, session_id, args)
 
@@ -464,6 +474,14 @@ class ToolRuntime:
                  "citation": self.rules.cite(ki.get("source"))}
                 for ki in matches
             ],
+            # A known issue about a feature is only half the answer. The other
+            # half is what that feature's documented limit actually is - because
+            # the customer's belief is usually a *wrong limit* ("our plan caps at
+            # 3,000 rows") that the known issue silently produced. Returning both
+            # together lets one answer correct the misconception instead of
+            # leaving it standing.
+            "related_plan_capabilities": self._related_capabilities(
+                args["description"], matches),
             "note": ("No current known issue matches this description."
                      if not matches else
                      "A matching known issue means this is a recognised product problem "
@@ -472,6 +490,21 @@ class ToolRuntime:
                 "Resolved issues must not be used to explain new incidents unless the "
                 "evidence specifically matches."),
         }
+
+    def _related_capabilities(self, description: str, matches: list[dict]) -> list[dict]:
+        haystack = " ".join([description] + [
+            f"{ki.get('title', '')} {ki.get('trigger', '')}" for ki in matches]).lower()
+        out = []
+        for name, spec in (self.rules.raw.get("plan_capabilities") or {}).items():
+            words = [w for w in name.split("_") if len(w) > 2]
+            if not all(w in haystack for w in words):
+                continue
+            out.append({
+                "capability": name.replace("_", " "),
+                **{k: v for k, v in spec.items() if k != "source"},
+                "citation": self.rules.cite(spec.get("source")),
+            })
+        return out
 
     # -- structured data ----------------------------------------------------
     def _t_get_account_context(self, principal: Principal, session_id: str, args: dict) -> dict:
@@ -699,5 +732,132 @@ def serialise_result(result: Any) -> str:
     return json.dumps(result, default=str, ensure_ascii=False)
 
 
+
+
+# ---------------------------------------------------------------------------
+# Model-facing projection
+# ---------------------------------------------------------------------------
+# The UI and the model need different things from a tool result. The trace panel
+# wants every citation in full, the whole rule trace and each ranking reason; the
+# model needs the decision, the arithmetic and a short citation label.
+#
+# Sending one payload to both is what pushed requests over Groq's free-tier
+# ceiling of 8,000 tokens per minute (which counts max_tokens too). A single
+# document search returned ~2,400 tokens of clause text the model had already
+# been given the conclusion for.
+#
+# So the SSE event keeps the full payload for the UI, and only this projection
+# goes into the conversation. It is a real separation of concerns, not just a
+# size trick: it also stops the model re-deriving an answer from raw clause text
+# when a decided verdict is sitting right next to it.
+
+MODEL_TEXT_LIMIT = 320
+
+
+def _clip(text: str | None, limit: int = MODEL_TEXT_LIMIT) -> str | None:
+    if not text:
+        return text
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _compact_citation(citation: dict | None) -> str | None:
+    if not citation:
+        return None
+    return citation.get("citation") or citation.get("clause_id")
+
+
+def _compact_verdict(verdict: dict) -> dict:
+    out = {
+        "decision": verdict.get("decision"),
+        "headline": verdict.get("headline"),
+        "confidence": verdict.get("confidence"),
+        "calculation": verdict.get("computation"),
+        "facts": verdict.get("facts"),
+    }
+    if verdict.get("amount_inr") is not None:
+        out["amount_inr"] = verdict["amount_inr"]
+    if verdict.get("needs_human"):
+        out["needs_human"] = True
+        out["needs_human_reason"] = verdict.get("needs_human_reason")
+    if verdict.get("caveats"):
+        out["caveats"] = verdict["caveats"]
+    if verdict.get("assumptions"):
+        out["assumptions"] = verdict["assumptions"]
+    applied = (verdict.get("rule_applied") or {})
+    out["rule_applied"] = {
+        "authority": applied.get("authority"),
+        "source": _compact_citation(applied.get("citation")),
+    }
+    overridden = (verdict.get("rule_overridden") or {})
+    if overridden:
+        out["rule_overridden"] = _compact_citation(overridden.get("citation"))
+    out["cite_these"] = [c for c in
+                         (_compact_citation(c) for c in verdict.get("citations", []))
+                         if c]
+    return out
+
+
+def compact_for_model(name: str, result: Any) -> Any:
+    """Shrink a tool result to what the model actually needs to answer."""
+    if not isinstance(result, dict):
+        return result
+    out = dict(result)
+
+    if "verdict" in out:
+        out["verdict"] = _compact_verdict(out["verdict"])
+
+    if "results" in out:
+        out["results"] = [{
+            "citation": r.get("citation"),
+            "authority": r.get("authority"),
+            "status": r.get("status"),
+            "account_scope": r.get("account_scope"),
+            "text": _clip(r.get("text"), 420),
+        } for r in out["results"]]
+
+    if out.get("conflicts"):
+        out["conflicts"] = [{
+            "topic": c.get("topic"),
+            "resolution": c.get("resolution"),
+            "authoritative": c.get("authoritative"),
+            "overridden": [o.get("citation") for o in c.get("overridden", [])],
+        } for c in out["conflicts"]]
+
+    if out.get("signals"):
+        out["signals"] = [{
+            "type": s.get("type"),
+            "severity": s.get("severity"),
+            "title": s.get("title"),
+            "detail": _clip(s.get("detail"), 400),
+            "accounts": s.get("accounts"),
+            "refs": [e.get("ticket_id") or e.get("order_id")
+                     for e in s.get("evidence", [])
+                     if e.get("ticket_id") or e.get("order_id")],
+            "recommended_action": _clip(s.get("recommended_action"), 220),
+        } for s in out["signals"]]
+
+    if out.get("matches"):
+        out["matches"] = [{
+            "id": m.get("id"), "title": m.get("title"), "status": m.get("status"),
+            "trigger": m.get("trigger"), "workaround": m.get("workaround"),
+            "caution": _clip(m.get("caution"), 260),
+            "applies_to_plans": m.get("applies_to_plans"),
+            "citation": _compact_citation(m.get("citation")),
+        } for m in out["matches"]]
+
+    if "proposal" in out:
+        proposal = out["proposal"]
+        out["proposal"] = {
+            "proposal_id": proposal.get("proposal_id"),
+            "title": proposal.get("title"),
+            "preview": proposal.get("preview"),
+            "warnings": proposal.get("warnings"),
+            "status": "awaiting the user's confirmation - nothing has been created",
+        }
+
+    return out
+
+
 __all__ = ["ToolRuntime", "TOOL_SPECS", "TOOL_BY_NAME", "STATE_CHANGING",
-           "tools_for", "tool_catalogue", "serialise_result"]
+           "tools_for", "tool_catalogue", "serialise_result", "compact_for_model"]

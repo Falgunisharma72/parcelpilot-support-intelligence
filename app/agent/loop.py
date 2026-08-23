@@ -28,7 +28,8 @@ from app.agent.providers import (
     tool_results, user,
 )
 from app.agent.tools import (
-    STATE_CHANGING, TOOL_BY_NAME, ToolRuntime, serialise_result, tools_for,
+    STATE_CHANGING, TOOL_BY_NAME, ToolRuntime, compact_for_model,
+    serialise_result, tools_for,
 )
 from app.config import MAX_AGENT_STEPS, fmt
 from app.core.principal import AccessDenied, DEMO_USERS, Principal
@@ -173,8 +174,11 @@ class Agent:
                 if isinstance(result, dict) and result.get("status") == "confirmation_required":
                     yield {"type": "proposal", "proposal": result["proposal"]}
 
+                # The UI already received the full payload in the event above;
+                # the conversation carries only what the model needs to answer.
                 results.append({"id": call.id, "name": call.name,
-                                "content": serialise_result(result),
+                                "content": serialise_result(
+                                    compact_for_model(call.name, result)),
                                 "is_error": is_error})
 
             session.messages.append(tool_results(results))

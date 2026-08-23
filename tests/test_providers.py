@@ -10,11 +10,14 @@ from __future__ import annotations
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 import pytest
 
 from app.agent.providers.base import Message, safe_json, tool_results, user
 from app.agent.providers.openai_compat import OpenAICompatProvider, to_openai_tools
+
+ROOT = Path(__file__).resolve().parent.parent
 
 TOOLS = [{
     "name": "check_cancellation",
@@ -359,3 +362,140 @@ def openai_bad_request():
     request = httpx.Request("POST", "http://x/v1/chat/completions")
     response = httpx.Response(400, request=request, json={"error": {"message": "bad"}})
     return openai.BadRequestError("bad", response=response, body=None)
+
+
+class _NotFoundHandler(BaseHTTPRequestHandler):
+    """404 on chat completions, but a real catalogue on /models."""
+    def do_POST(self):                                        # noqa: N802
+        body = json.dumps({"error": {"message": "The model does not exist"}}).encode()
+        self.send_response(404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):                                         # noqa: N802
+        body = json.dumps({"object": "list", "data": [
+            {"id": "openai/gpt-oss-120b", "object": "model"},
+            {"id": "models/gemini-flash-lite-latest", "object": "model"},
+        ]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def test_retired_model_error_names_what_the_key_can_actually_reach():
+    """Regression: Groq retired the Llama 3.3 ids and the Gemini key could not
+    serve gemini-2.5-flash. A bare 404 is unactionable - the error must list the
+    catalogue, in the form the API actually accepts."""
+    httpd = HTTPServer(("127.0.0.1", 0), _NotFoundHandler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        provider = OpenAICompatProvider(
+            id="mock", api_key="k", base_url=f"http://127.0.0.1:{httpd.server_port}/v1",
+            model="llama-3.3-70b-versatile", supports_stream_options=False)
+        with pytest.raises(Exception) as excinfo:
+            list(provider.stream(system="s", messages=[user("hi")], tools=TOOLS))
+        message = str(excinfo.value)
+        assert "llama-3.3-70b-versatile" in message
+        assert "PARCELPILOT_MODEL" in message
+        # Gemini's "models/" prefix is stripped because the API rejects it...
+        assert "gemini-flash-lite-latest" in message
+        # ...but a slash that is genuinely part of the id must survive.
+        assert "openai/gpt-oss-120b" in message
+    finally:
+        httpd.shutdown()
+
+
+def test_model_suggestions_keep_slashes_that_are_part_of_the_id():
+    from app.agent.providers.openai_compat import _strip_models_prefix
+    assert _strip_models_prefix("models/gemini-flash-latest") == "gemini-flash-latest"
+    assert _strip_models_prefix("openai/gpt-oss-120b") == "openai/gpt-oss-120b"
+
+
+def test_env_file_is_visible_to_provider_selection(tmp_path):
+    """Regression: provider selection reads os.environ directly, and nothing in
+    its import chain loaded .env - so a key sitting in .env was invisible to
+    `make providers`.
+
+    Run in a subprocess against a scratch .env. An earlier version reloaded the
+    package in-process, which left a second copy of it in sys.modules - and then
+    `except QuotaExhausted` in one copy did not catch the class raised by the
+    other, failing an unrelated test. Module surgery does not stay local.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    (tmp_path / ".env").write_text("GROQ_API_KEY=from-dotenv\n")
+    script = textwrap.dedent(f"""
+        import os, sys
+        sys.path.insert(0, {str(ROOT)!r})
+        os.chdir({str(tmp_path)!r})
+        for key in ("GROQ_API_KEY", "GEMINI_API_KEY", "PARCELPILOT_PROVIDER"):
+            os.environ.pop(key, None)
+        from app.agent.providers import resolve
+        preset = resolve()
+        print(preset.id if preset else "none")
+    """)
+    out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert out.stdout.strip() == "groq", out.stderr[-600:]
+
+
+class _QuotaHandler(BaseHTTPRequestHandler):
+    """429 carrying a daily-quota message and a long Retry-After."""
+    attempts = 0
+
+    def do_POST(self):                                        # noqa: N802
+        _QuotaHandler.attempts += 1
+        body = json.dumps({"error": {"message":
+            "Rate limit reached for model `x` on tokens per day (TPD): "
+            "Limit 200000, Used 199115. Please try again in 11m9s."}}).encode()
+        self.send_response(429)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Retry-After", "669")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def test_daily_quota_fails_fast_instead_of_backing_off(monkeypatch):
+    """A per-minute limit clears in seconds and is worth retrying. A daily quota
+    does not - backing off for every remaining request wastes minutes to arrive
+    at the same failure."""
+    from app.agent.providers.base import QuotaExhausted
+    monkeypatch.setattr("time.sleep", lambda *_: pytest.fail("must not back off"))
+    httpd = HTTPServer(("127.0.0.1", 0), _QuotaHandler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    _QuotaHandler.attempts = 0
+    try:
+        provider = OpenAICompatProvider(
+            id="mock", api_key="k", base_url=f"http://127.0.0.1:{httpd.server_port}/v1",
+            model="m", supports_stream_options=False)
+        with pytest.raises(QuotaExhausted) as excinfo:
+            _run(provider)
+        assert _QuotaHandler.attempts == 1, "quota exhaustion must not be retried"
+        assert "PARCELPILOT_PROVIDER" in str(excinfo.value)
+    finally:
+        httpd.shutdown()
+
+
+@pytest.mark.parametrize("detail,retry_after,expected", [
+    ("Rate limit reached ... on tokens per minute (TPM): Limit 8000", 2.0, False),
+    ("Rate limit reached ... on tokens per day (TPD): Limit 200000", None, True),
+    ("You exceeded your current quota, please check your plan", None, True),
+    ("Quota exceeded for metric: generate_content_free_tier_requests", None, True),
+    ("some transient blip", 5.0, False),
+    ("some transient blip", 700.0, True),
+])
+def test_quota_exhaustion_is_told_apart_from_throttling(detail, retry_after, expected):
+    from app.agent.providers.openai_compat import _is_quota_exhausted
+    assert _is_quota_exhausted(detail, retry_after) is expected

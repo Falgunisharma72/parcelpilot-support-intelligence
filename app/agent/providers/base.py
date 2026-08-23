@@ -23,6 +23,11 @@ class ToolCall:
     id: str
     name: str
     input: dict[str, Any]
+    # Opaque provider data that must be echoed back with this call. Gemini 3.x
+    # returns a `thought_signature` here and rejects the next request with a 400
+    # if it is missing; other providers leave it empty. The loop never inspects
+    # it - it only has to survive the round trip.
+    extra: dict[str, Any] | None = None
 
     @staticmethod
     def new_id() -> str:
@@ -70,6 +75,15 @@ class ProviderError(RuntimeError):
     """A provider failed in a way the user needs to hear about verbatim."""
 
 
+class QuotaExhausted(ProviderError):
+    """The account's quota window is spent - retrying will not help.
+
+    Distinct from a burst rate limit: a caller running a batch (the eval
+    harness) should stop immediately rather than work through the remaining
+    items to reach the same failure more slowly.
+    """
+
+
 class LLMProvider(Protocol):
     """What the agent loop needs from a model backend."""
 
@@ -113,4 +127,4 @@ def safe_json(raw: str | None) -> dict:
 
 
 __all__ = ["ToolCall", "Turn", "Message", "user", "assistant", "tool_results",
-           "LLMProvider", "ProviderError", "safe_json"]
+           "LLMProvider", "ProviderError", "QuotaExhausted", "safe_json"]

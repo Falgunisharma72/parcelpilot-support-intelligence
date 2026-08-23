@@ -61,7 +61,10 @@ BUSINESS_HOURS_ASSUMPTION = (
 # default model. Neither is required.
 PROVIDER = os.getenv("PARCELPILOT_PROVIDER")
 MODEL = os.getenv("PARCELPILOT_MODEL")
-MAX_TOKENS = int(os.getenv("PARCELPILOT_MAX_TOKENS", "4096"))
+# Kept modest on purpose: free tiers meter tokens-per-minute and count the
+# requested max_tokens against that budget, so an oversized ceiling throttles the
+# conversation without ever being used. A support answer does not need more.
+MAX_TOKENS = int(os.getenv("PARCELPILOT_MAX_TOKENS", "1600"))
 EFFORT = os.getenv("PARCELPILOT_EFFORT", "high")          # Anthropic only
 SHOW_THINKING = os.getenv("PARCELPILOT_SHOW_THINKING", "1") not in ("0", "false", "")
 MAX_AGENT_STEPS = int(os.getenv("PARCELPILOT_MAX_AGENT_STEPS", "12"))

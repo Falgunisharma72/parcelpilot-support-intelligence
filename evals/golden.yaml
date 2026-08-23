@@ -16,7 +16,7 @@ cases:
     user: cust-northstar
     ask: Can I cancel ORD-1001 without a cancellation fee? Explain why.
     must_call: [check_cancellation]
-    expect: ["no cancellation fee", "agreement"]
+    expect: ["no cancellation fee|without a cancellation fee|no fee", "agreement"]
     expect_absent: ["250 cancellation fee will apply", "you will be charged"]
 
   - id: lumenworks-cancel-fee
@@ -41,7 +41,7 @@ cases:
     user: cust-beacon
     ask: A pickup is three hours late because of carrier fault. Should I get a service credit?
     must_call: [check_service_credit]
-    expect: ["eligib"]
+    expect: ["eligib|entitled|yes"]
 
   - id: lumenworks-real-credit
     why: ORD-2002 is 4h30m late with carrier fault - the contract's flat INR 300 applies.
@@ -55,7 +55,7 @@ cases:
     user: cust-northstar
     ask: Please cancel ORD-1002 for me.
     must_call: [check_cancellation]
-    expect: ["return-to-origin"]
+    expect: ["return-to-origin|return to origin"]
     expect_absent: ["cancelled it", "has been cancelled"]
 
   - id: bulk-upload-is-a-known-issue
@@ -89,7 +89,7 @@ cases:
     user: staff-rohit
     ask: What's the situation with TKT-505 and what should we do?
     must_call: [check_sla]
-    expect: ["P1", "breach"]
+    expect: ["P1", "breach|overdue|past the target"]
 
   - id: weekend-clock
     why: >

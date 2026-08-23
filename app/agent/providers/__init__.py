@@ -26,7 +26,7 @@ from dataclasses import dataclass
 # config - which is exactly how it failed the first time.
 import app.config  # noqa: F401
 from app.agent.providers.base import (
-    LLMProvider, Message, ProviderError, ToolCall, Turn,
+    LLMProvider, Message, ProviderError, QuotaExhausted, ToolCall, Turn,
     assistant, safe_json, tool_results, user,
 )
 from app.agent.providers.openai_compat import OpenAICompatProvider
@@ -62,10 +62,19 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         id="gemini", label="Google Gemini", env_key="GEMINI_API_KEY",
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        default_model="gemini-2.5-flash",
-        free="Free tier from AI Studio, no card.",
+        # A rolling alias on purpose. Pinned ids rot: Groq retired the Llama 3.3
+        # ids and this key cannot serve gemini-2.5-flash, both of which surfaced
+        # as opaque 404s. An alias keeps the default working as catalogues move.
+        # The *lite* alias, deliberately. gemini-flash-latest exhausts its free
+        # daily quota quickly; flash-lite carries a far higher free allowance,
+        # which is what a multi-step agent needs. Alias rather than a pinned id
+        # so the default survives catalogue changes.
+        default_model="gemini-flash-lite-latest",
+        free="Free tier from AI Studio, no card. Much higher tokens-per-minute "
+             "than most, which suits a multi-step agent.",
         signup="https://aistudio.google.com/apikey",
-        notes="Strong function calling and a large context window.",
+        notes="Strong function calling, large context, and a rate limit that "
+              "comfortably fits multi-tool conversations.",
         supports_stream_options=False,
     ),
     Preset(
@@ -173,7 +182,7 @@ def build_provider(preset: Preset | None = None) -> LLMProvider:
             + " - or run Ollama locally. See `make providers` for free options.")
 
     model = os.getenv("PARCELPILOT_MODEL") or preset.default_model
-    max_tokens = int(os.getenv("PARCELPILOT_MAX_TOKENS", "4096"))
+    max_tokens = int(os.getenv("PARCELPILOT_MAX_TOKENS", "1600"))
 
     if preset.id == "anthropic":
         from app.agent.providers.anthropic_provider import AnthropicProvider
@@ -235,4 +244,5 @@ def describe() -> dict:
 __all__ = ["PRESETS", "PRESET_BY_ID", "Preset", "available", "resolve",
            "build_provider", "describe", "ollama_running",
            "LLMProvider", "Message", "Turn", "ToolCall", "ProviderError",
+           "QuotaExhausted",
            "user", "assistant", "tool_results", "safe_json"]

@@ -58,3 +58,22 @@ def test_descriptive_overlap_is_not_reported_as_a_conflict(index):
 def test_known_issue_matching_respects_plan(rules):
     assert rules.match_known_issues("bulk upload of a large csv fails", plan="Growth")
     assert not rules.match_known_issues("bulk upload of a large csv fails", plan="Standard")
+
+
+def test_known_issue_carries_the_real_product_limit(runtime, lumenworks):
+    """The customer's belief is usually a *wrong limit* the known issue produced
+    ("our plan caps at 3,000 rows"). Returning the documented limit alongside the
+    issue lets one answer correct the misconception rather than leave it standing."""
+    result = runtime.run(lumenworks, "s", "find_known_issues",
+                         {"description": "our 4,200-row CSV bulk upload fails at 70%",
+                          "plan": "Growth"})
+    assert [m["id"] for m in result["matches"]] == ["KI-208"]
+    capability = result["related_plan_capabilities"][0]
+    assert capability["max_rows"] == 5000
+    assert "Growth" in capability["available_on"]
+
+
+def test_unrelated_symptom_does_not_drag_in_capabilities(runtime, lumenworks):
+    result = runtime.run(lumenworks, "s", "find_known_issues",
+                         {"description": "pickup status stuck on BOOKED"})
+    assert result["related_plan_capabilities"] == []

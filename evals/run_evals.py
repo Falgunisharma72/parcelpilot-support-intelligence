@@ -25,7 +25,7 @@ from pathlib import Path
 import yaml
 
 from app.agent.loop import Agent, Session
-from app.agent.providers import ProviderError, build_provider
+from app.agent.providers import ProviderError, QuotaExhausted, build_provider
 from app.agent.tools import ToolRuntime
 from app.core.db import DataGateway
 from app.core.principal import resolve_principal
@@ -59,6 +59,7 @@ def run_case(agent: Agent, gateway: DataGateway, case: dict) -> dict:
 
     text, tools_used, proposals, errors = "", [], 0, []
     started = time.time()
+    quota_hit = False
     for event in agent.run(session, case["ask"]):
         if event["type"] == "text":
             text += event["text"]
@@ -68,6 +69,8 @@ def run_case(agent: Agent, gateway: DataGateway, case: dict) -> dict:
             proposals += 1
         elif event["type"] == "error":
             errors.append(event["message"])
+            if "quota is exhausted" in event["message"]:
+                quota_hit = True
     elapsed = time.time() - started
 
     after = gateway.conn.execute("SELECT COUNT(*) FROM escalations").fetchone()[0]
@@ -83,8 +86,14 @@ def run_case(agent: Agent, gateway: DataGateway, case: dict) -> dict:
     for tool in case.get("must_not_call", []):
         if tool in tools_used:
             failures.append(f"called {tool}, which it should not")
+    # "a|b" means either phrasing satisfies the assertion. Models express the
+    # same fact several ways - "without a cancellation fee" and "no cancellation
+    # fee" are the same answer - and an eval that fails on the choice of synonym
+    # measures phrasing rather than correctness. Alternatives are spelled out in
+    # the case file so it stays explicit what counts as passing.
     for needle in case.get("expect", []):
-        if normalise(needle) not in low:
+        options = [normalise(o) for o in str(needle).split("|") if o.strip()]
+        if not any(o in low for o in options):
             failures.append(f"answer is missing {needle!r}")
     for needle in case.get("expect_absent", []):
         if normalise(needle) in low:
@@ -98,7 +107,7 @@ def run_case(agent: Agent, gateway: DataGateway, case: dict) -> dict:
 
     return {
         "id": case["id"], "passed": not failures, "failures": failures,
-        "tools": tools_used, "proposals": proposals,
+        "tools": tools_used, "proposals": proposals, "quota_exhausted": quota_hit,
         "seconds": round(elapsed, 1), "answer": text.strip(),
     }
 
@@ -148,12 +157,25 @@ def main() -> int:
         if args.verbose and result["answer"]:
             for line in result["answer"].splitlines():
                 print(f"        {DIM}{line}{RESET}")
+        if result["quota_exhausted"]:
+            # Every remaining case would fail the same way, several seconds of
+            # backoff at a time. Stop and say so, rather than reporting a score
+            # that measures the quota rather than the agent.
+            remaining = len(cases) - len(results)
+            print(f"\n  {YELLOW}Provider quota exhausted - stopping with {remaining} "
+                  f"case(s) unrun.{RESET}")
+            print(f"  {DIM}Switch provider with PARCELPILOT_PROVIDER, or wait for the "
+                  f"quota window to reset.{RESET}")
+            break
 
     passed = sum(1 for r in results if r["passed"])
     total = len(results)
+    blocked = sum(1 for r in results if r["quota_exhausted"])
     colour = GREEN if passed == total else (YELLOW if passed > total * 0.7 else RED)
     print(f"\n  {colour}{passed}/{total} passed{RESET}   "
-          f"{DIM}{sum(r['seconds'] for r in results):.0f}s total{RESET}\n")
+          f"{DIM}{sum(r['seconds'] for r in results):.0f}s total{RESET}"
+          + (f"   {YELLOW}({blocked} blocked by provider quota, not by the agent){RESET}"
+             if blocked else "") + "\n")
 
     if args.json:
         Path(args.json).write_text(json.dumps(
