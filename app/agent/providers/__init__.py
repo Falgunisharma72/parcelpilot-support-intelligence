@@ -20,6 +20,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+# Imported for its side effect: app.config loads .env. Provider selection reads
+# the environment directly, so without this a key sitting in .env is invisible
+# to `make providers` and to any entry point that has not already imported
+# config - which is exactly how it failed the first time.
+import app.config  # noqa: F401
 from app.agent.providers.base import (
     LLMProvider, Message, ProviderError, ToolCall, Turn,
     assistant, safe_json, tool_results, user,
@@ -47,11 +52,12 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         id="groq", label="Groq", env_key="GROQ_API_KEY",
         base_url="https://api.groq.com/openai/v1",
-        default_model="llama-3.3-70b-versatile",
+        default_model="openai/gpt-oss-120b",
         free="Generous free tier, no card. Very fast.",
         signup="https://console.groq.com/keys",
         notes="Best default: reliable tool calling and low latency, which matters "
-              "because this agent makes several tool calls per answer.",
+              "because this agent makes several tool calls per answer. Groq's "
+              "catalogue changes - `make providers` lists what your key can reach.",
     ),
     Preset(
         id="gemini", label="Google Gemini", env_key="GEMINI_API_KEY",

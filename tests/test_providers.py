@@ -217,3 +217,60 @@ def test_tool_schema_conversion():
 ])
 def test_safe_json(raw, expected):
     assert safe_json(raw) == expected
+
+
+class _NotFoundHandler(BaseHTTPRequestHandler):
+    """404 on chat completions, but a real catalogue on /models."""
+    def do_POST(self):                                        # noqa: N802
+        body = json.dumps({"error": {"message": "The model does not exist",
+                                     "type": "invalid_request_error"}}).encode()
+        self.send_response(404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):                                         # noqa: N802
+        body = json.dumps({"object": "list", "data": [
+            {"id": "openai/gpt-oss-120b", "object": "model"},
+            {"id": "qwen/qwen3.6-27b", "object": "model"},
+        ]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def test_retired_model_error_names_what_the_key_can_actually_reach():
+    """Regression: Groq retired the Llama 3.3 ids, so the configured default
+    404'd. A bare '404' is unactionable - the error must list the catalogue."""
+    httpd = HTTPServer(("127.0.0.1", 0), _NotFoundHandler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        provider = OpenAICompatProvider(
+            id="mock", api_key="k", base_url=f"http://127.0.0.1:{httpd.server_port}/v1",
+            model="llama-3.3-70b-versatile", supports_stream_options=False)
+        with pytest.raises(Exception) as excinfo:
+            list(provider.stream(system="s", messages=[user("hi")], tools=TOOLS))
+        message = str(excinfo.value)
+        assert "llama-3.3-70b-versatile" in message
+        assert "openai/gpt-oss-120b" in message
+        assert "PARCELPILOT_MODEL" in message
+    finally:
+        httpd.shutdown()
+
+
+def test_env_file_is_visible_to_provider_selection():
+    """Regression: provider selection reads os.environ directly, and nothing in
+    its import chain loaded .env - so a key sitting in .env was invisible to
+    `make providers`. Importing the registry must pull config in."""
+    import sys
+    for module in [m for m in sys.modules if m.startswith("app.agent.providers")]:
+        del sys.modules[module]
+    import app.agent.providers as registry
+    assert "app.config" in sys.modules
+    assert hasattr(registry, "resolve")

@@ -147,6 +147,10 @@ class OpenAICompatProvider:
                         announced.add(idx)
                         yield {"type": "tool_pending", "name": slot["name"]}
 
+        except openai.NotFoundError as exc:
+            # Provider catalogues change - Groq retired the Llama 3.3 ids, for
+            # instance. A bare 404 is useless, so say what this key can reach.
+            raise ProviderError(self._explain_missing_model()) from exc
         except openai.BadRequestError as exc:
             raise ProviderError(self._explain_bad_request(exc)) from exc
         except openai.AuthenticationError as exc:
@@ -206,6 +210,13 @@ class OpenAICompatProvider:
                     f"Available to this key: {available}. Set PARCELPILOT_MODEL to one "
                     "of them.")
         return f"{self.id} rejected the request: {detail}"
+
+    def _explain_missing_model(self) -> str:
+        available = self.list_models()
+        listed = ", ".join(available) if available else "none returned"
+        return (f"{self.id} does not serve the model '{self.model}'. Models available "
+                f"to this key: {listed}. Set PARCELPILOT_MODEL to one of them, or run "
+                "`make providers`.")
 
     def list_models(self) -> list[str]:
         try:
